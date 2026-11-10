@@ -44,6 +44,6 @@ jobs:
             Instalador de PocketPod para Windows.
 
             Descarga `PocketPod_*_x64-setup.exe` (recomendado) o el `.msi`.
-            Requiere la app de escritorio de Spotify.
+            Requiere la app de escritorio de Spotify o Apple Music.
           releaseDraft: true
           prerelease: false

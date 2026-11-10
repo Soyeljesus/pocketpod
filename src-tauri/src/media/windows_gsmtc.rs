@@ -95,6 +95,19 @@ fn read_artwork(
     Some(format!("data:{};base64,{}", mime, b64))
 }
 
+fn current_filetime_ticks() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    const WINDOWS_EPOCH_OFFSET_SECS: i64 = 11_644_473_600;
+
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => {
+            (duration.as_secs() as i64 + WINDOWS_EPOCH_OFFSET_SECS) * 10_000_000
+                + duration.subsec_nanos() as i64 / 100
+        }
+        Err(_) => 0,
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct MediaStateDto {
     pub title: String,
@@ -126,24 +139,58 @@ impl MediaStateDto {
     }
 }
 
-fn get_spotify_session() -> Option<GlobalSystemMediaTransportControlsSession> {
+fn is_target_player(app_id: &str) -> bool {
+    let id = app_id.to_lowercase();
+    id.contains("spotify") || id.contains("apple") || id.contains("itunes")
+}
+
+/// Elige la mejor sesión disponible. Prioriza la que está reproduciendo y,
+/// entre esas, los reproductores soportados (Spotify / Apple Music).
+fn get_media_session() -> Option<GlobalSystemMediaTransportControlsSession> {
     let op = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().ok()?;
     let manager = block_on(op).ok()?;
     let sessions = manager.GetSessions().ok()?;
+    let count = sessions.Size().ok()?;
 
-    for i in 0..sessions.Size().ok()? {
-        let session = sessions.GetAt(i).ok()?;
-        let app_id = session.SourceAppUserModelId().ok()?.to_string();
+    // (sesión, es reproductor soportado, está reproduciendo)
+    let mut candidates: Vec<(GlobalSystemMediaTransportControlsSession, bool, bool)> =
+        Vec::new();
 
-        if app_id.to_lowercase().contains("spotify") {
-            return Some(session);
-        }
+    for i in 0..count {
+        let Ok(session) = sessions.GetAt(i) else {
+            continue;
+        };
+
+        let app_id = session
+            .SourceAppUserModelId()
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let known = is_target_player(&app_id);
+
+        let playing = session
+            .GetPlaybackInfo()
+            .ok()
+            .and_then(|info| info.PlaybackStatus().ok())
+            .map(|status| {
+                status == GlobalSystemMediaTransportControlsSessionPlaybackStatus::Playing
+            })
+            .unwrap_or(false);
+
+        candidates.push((session, known, playing));
     }
-    None
+
+    let index = candidates
+        .iter()
+        .position(|(_, known, playing)| *playing && *known)
+        .or_else(|| candidates.iter().position(|(_, _, playing)| *playing))
+        .or_else(|| candidates.iter().position(|(_, known, _)| *known))
+        .or(if candidates.is_empty() { None } else { Some(0) })?;
+
+    Some(candidates.swap_remove(index).0)
 }
 
 pub fn get_media_state() -> MediaStateDto {
-    let session = match get_spotify_session() {
+    let session = match get_media_session() {
         Some(s) => s,
         None => return MediaStateDto::empty(),
     };
@@ -197,11 +244,31 @@ pub fn get_media_state() -> MediaStateDto {
         }
     }
 
-    // Línea de tiempo
+    // Línea de tiempo. Algunos reproductores (por ejemplo Apple Music)
+    // actualizan `Position` con poca frecuencia, así que se corrige con
+    // `LastUpdatedTime` para obtener la posición real en este instante.
     if let Ok(timeline) = session.GetTimelineProperties() {
-        if let Ok(pos) = timeline.Position() {
-            dto.position_sec = pos.Duration as f64 / 10_000_000.0;
+        let mut position = timeline
+            .Position()
+            .map(|pos| pos.Duration as f64 / 10_000_000.0)
+            .unwrap_or(0.0);
+
+        if dto.status == "playing" {
+            if let Ok(last_updated) = timeline.LastUpdatedTime() {
+                if last_updated.UniversalTime > 0 {
+                    let elapsed =
+                        (current_filetime_ticks() - last_updated.UniversalTime) as f64
+                            / 10_000_000.0;
+                    // Ignora valores absurdos por relojes desajustados.
+                    if (0.0..86_400.0).contains(&elapsed) {
+                        position += elapsed;
+                    }
+                }
+            }
         }
+
+        dto.position_sec = position;
+
         if let Ok(end) = timeline.EndTime() {
             dto.duration_sec = end.Duration as f64 / 10_000_000.0;
         }
@@ -211,7 +278,7 @@ pub fn get_media_state() -> MediaStateDto {
 }
 
 pub fn toggle_play_pause() -> Result<(), String> {
-    if let Some(s) = get_spotify_session() {
+    if let Some(s) = get_media_session() {
         if let Ok(op) = s.TryTogglePlayPauseAsync() {
             if let Ok(true) = block_on(op) { return Ok(()); }
         }
@@ -220,7 +287,7 @@ pub fn toggle_play_pause() -> Result<(), String> {
 }
 
 pub fn skip_next() -> Result<(), String> {
-    if let Some(s) = get_spotify_session() {
+    if let Some(s) = get_media_session() {
         if let Ok(op) = s.TrySkipNextAsync() {
             if let Ok(true) = block_on(op) { return Ok(()); }
         }
@@ -229,7 +296,7 @@ pub fn skip_next() -> Result<(), String> {
 }
 
 pub fn skip_previous() -> Result<(), String> {
-    if let Some(s) = get_spotify_session() {
+    if let Some(s) = get_media_session() {
         if let Ok(op) = s.TrySkipPreviousAsync() {
             if let Ok(true) = block_on(op) { return Ok(()); }
         }
@@ -238,7 +305,7 @@ pub fn skip_previous() -> Result<(), String> {
 }
 
 pub fn seek_to(seconds: f64) -> Result<(), String> {
-    if let Some(s) = get_spotify_session() {
+    if let Some(s) = get_media_session() {
         let ticks = (seconds * 10_000_000.0) as i64;
         if let Ok(op) = s.TryChangePlaybackPositionAsync(ticks) {
             if let Ok(true) = block_on(op) { return Ok(()); }

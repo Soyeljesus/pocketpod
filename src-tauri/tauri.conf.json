@@ -36,8 +36,8 @@
     "active": true,
     "targets": "all",
     "publisher": "PocketPod",
-    "shortDescription": "Un iPod para controlar Spotify en Windows",
-    "longDescription": "PocketPod es un reproductor de escritorio con forma de iPod clásico que controla la reproducción de Spotify en Windows: pantalla Now Playing, historial de canciones, rueda click y controles de ventana integrados.",
+    "shortDescription": "Un iPod para controlar Spotify y Apple Music en Windows",
+    "longDescription": "PocketPod es un reproductor de escritorio con forma de iPod clásico que controla la reproducción de Spotify y Apple Music en Windows: pantalla Now Playing, historial de canciones, rueda click y controles de ventana integrados.",
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"

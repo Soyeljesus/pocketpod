@@ -96,8 +96,8 @@ export function IpodDisplay({
         <MenuView state={state} history={history} />
       ) : !hasTrack ? (
         <div className="ipod-display-empty">
-          <p className="empty-title">Abre Spotify</p>
-          <p className="empty-sub">para comenzar</p>
+          <p className="empty-title">Abre un reproductor</p>
+          <p className="empty-sub">Spotify o Apple Music</p>
         </div>
       ) : (
         <div className="now-playing">

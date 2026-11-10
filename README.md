@@ -1,8 +1,8 @@
 # PocketPod
 
-Un reproductor de escritorio con forma de **iPod clásico** que controla **Spotify** en Windows.
+Un reproductor de escritorio con forma de **iPod clásico** que controla **Spotify** y **Apple Music** en Windows.
 
-PocketPod se conecta a la sesión de Spotify a través de los controles multimedia de Windows (GSMTC), así que no necesita la API web ni iniciar sesión: si Spotify está reproduciendo, el iPod lo muestra y lo controla.
+PocketPod se conecta a la sesión del reproductor a través de los controles multimedia de Windows (GSMTC), así que no necesita la API web ni iniciar sesión: si Spotify o Apple Music están reproduciendo, el iPod lo muestra y lo controla.
 
 ![Plataforma](https://img.shields.io/badge/plataforma-Windows%2010%2F11-0ea5e9)
 
@@ -18,7 +18,7 @@ PocketPod se conecta a la sesión de Spotify a través de los controles multimed
 ## Requisitos
 
 - Windows 10 u 11 de 64 bits.
-- La **app de escritorio de Spotify** abierta (la versión web no expone los controles multimedia).
+- La **app de escritorio de Spotify** o **Apple Music** abierta (las versiones web no exponen los controles multimedia).
 - WebView2. El instalador lo incluye; en Windows 11 ya viene preinstalado.
 
 ## Descargar e instalar
@@ -34,7 +34,7 @@ PocketPod se conecta a la sesión de Spotify a través de los controles multimed
 ## Uso
 
 - **MENU**: alterna entre `Now Playing` y el historial de canciones (`Music`).
-- **◀◀ / ▶▶**: canción anterior / siguiente en Spotify.
+- **◀◀ / ▶▶**: canción anterior / siguiente en el reproductor activo.
 - **▶ / ❚❚** (abajo): reproducir o pausar.
 - **Botón central**: vuelve a `Now Playing` desde el menú.
 - Arrastra la **franja superior** de la carcasa para mover la ventana.

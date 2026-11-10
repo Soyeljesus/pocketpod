@@ -12,8 +12,15 @@ import {
 const HISTORY_KEY = "pocketpod.history";
 const HISTORY_LIMIT = 40;
 
+/** Margen para distinguir un pequeño retraso del backend de un seek real. */
+const BACKWARD_SEEK_THRESHOLD_SEC = 3;
+
 function trackKey(track: { title: string; artist: string }): string {
   return `${track.title}::${track.artist}`.toLowerCase();
+}
+
+function positionKey(media: MediaState): string {
+  return `${trackKey(media)}::${media.album}::${media.durationSec}`.toLowerCase();
 }
 
 function loadHistory(): HistoryEntry[] {
@@ -35,6 +42,28 @@ function saveHistory(history: HistoryEntry[]) {
   }
 }
 
+/**
+ * Punto de referencia para calcular la posición interpolada.
+ * `position` es la última posición conocida y `at` el instante (ms) en que
+ * se conoció. Mientras el estado sea "playing" se le suma el tiempo real
+ * transcurrido desde entonces.
+ */
+interface PositionAnchor {
+  position: number;
+  at: number;
+  key: string;
+  playing: boolean;
+  duration: number;
+}
+
+const EMPTY_ANCHOR: PositionAnchor = {
+  position: 0,
+  at: 0,
+  key: "",
+  playing: false,
+  duration: 0,
+};
+
 export interface UseMediaSessionResult {
   state: MediaState;
   /** Posición interpolada para que la barra avance de forma fluida. */
@@ -53,16 +82,20 @@ export interface UseMediaSessionResult {
  * Sondea el backend cada segundo para mantener frescos título, portada,
  * estado y duración. Entre sondeo y sondeo interpola la posición para que
  * la barra de progreso avance sin saltos.
+ *
+ * La posición nunca retrocede mientras suena la misma canción (salvo un
+ * seek real hacia atrás). Esto evita el efecto "suma y resta" que producen
+ * los reproductores que actualizan el timeline con retraso, como Apple Music.
  */
 export function useMediaSession(): UseMediaSessionResult {
   const [state, setState] = useState<MediaState>(EMPTY_MEDIA_STATE);
   const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [anchor, setAnchor] = useState<PositionAnchor>(EMPTY_ANCHOR);
 
   // "now" se actualiza 4 veces por segundo solo para animar la barra.
   const [now, setNow] = useState<number>(() => Date.now());
-  const lastUpdateRef = useRef<number>(Date.now());
   const lastTrackRef = useRef<string>("");
 
   const registerHistory = useCallback((media: MediaState) => {
@@ -96,6 +129,59 @@ export function useMediaSession(): UseMediaSessionResult {
     });
   }, []);
 
+  const applyPositionSnapshot = useCallback((media: MediaState) => {
+    const nowMs = Date.now();
+    const key = positionKey(media);
+    const playing = media.status === "playing";
+
+    setAnchor((prev) => {
+      // Canción distinta: empieza de cero con lo que diga el backend.
+      if (prev.key !== key) {
+        return {
+          position: media.positionSec,
+          at: nowMs,
+          key,
+          playing,
+          duration: media.durationSec,
+        };
+      }
+
+      // En pausa/parado se muestra exactamente la posición reportada.
+      if (!playing) {
+        return {
+          position: media.positionSec,
+          at: nowMs,
+          key,
+          playing: false,
+          duration: media.durationSec,
+        };
+      }
+
+      let position = media.positionSec;
+
+      if (prev.playing) {
+        const estimated = prev.position + (nowMs - prev.at) / 1000;
+
+        if (media.positionSec < estimated - BACKWARD_SEEK_THRESHOLD_SEC) {
+          // Retroceso grande: es un seek real, se acepta.
+          position = media.positionSec;
+        } else {
+          // Si el backend va rezagado, se conserva la estimación para que
+          // la barra no retroceda cada segundo.
+          position = Math.max(media.positionSec, estimated);
+        }
+      }
+
+      return {
+        position,
+        at: nowMs,
+        key,
+        playing: true,
+        duration: media.durationSec,
+      };
+    });
+  }, []);
+
   // Sondeo del backend.
   useEffect(() => {
     let cancelled = false;
@@ -106,7 +192,7 @@ export function useMediaSession(): UseMediaSessionResult {
         if (cancelled) return;
 
         setState(next);
-        lastUpdateRef.current = Date.now();
+        applyPositionSnapshot(next);
         setLoading(false);
         setError(null);
 
@@ -132,7 +218,7 @@ export function useMediaSession(): UseMediaSessionResult {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [registerHistory]);
+  }, [applyPositionSnapshot, registerHistory]);
 
   // Tic para interpolar la posición.
   useEffect(() => {
@@ -140,15 +226,12 @@ export function useMediaSession(): UseMediaSessionResult {
     return () => window.clearInterval(id);
   }, []);
 
-  const positionSec =
-    state.status === "playing"
-      ? Math.min(
-          state.positionSec + Math.max(0, now - lastUpdateRef.current) / 1000,
-          state.durationSec > 0
-            ? state.durationSec
-            : Number.POSITIVE_INFINITY,
-        )
-      : state.positionSec;
+  const positionSec = anchor.playing
+    ? Math.min(
+        anchor.position + Math.max(0, now - anchor.at) / 1000,
+        anchor.duration > 0 ? anchor.duration : Number.POSITIVE_INFINITY,
+      )
+    : anchor.position;
 
   const playPause = useCallback(async () => {
     try {
@@ -176,8 +259,8 @@ export function useMediaSession(): UseMediaSessionResult {
 
   const seek = useCallback(async (seconds: number) => {
     // Actualización optimista para que la barra responda al instante.
+    setAnchor((prev) => ({ ...prev, position: seconds, at: Date.now() }));
     setState((prev) => ({ ...prev, positionSec: seconds }));
-    lastUpdateRef.current = Date.now();
     try {
       await seekTo(seconds);
     } catch (e) {

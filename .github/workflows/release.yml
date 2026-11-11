@@ -117,7 +117,9 @@ jobs:
       - name: Rename APK
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          cp src-tauri/gen/android/app/build/outputs/apk/arm64/release/*.apk "PocketPod_${VERSION}_arm64.apk"
+          APK_PATH="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -path '*release*' | head -n 1)"
+          echo "APK: $APK_PATH"
+          cp "$APK_PATH" "PocketPod_${VERSION}_arm64.apk"
 
       - name: Attach APK to release
         env:

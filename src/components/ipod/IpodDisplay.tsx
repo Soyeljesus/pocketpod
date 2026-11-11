@@ -10,6 +10,7 @@ interface IpodDisplayProps {
   view: IpodView;
   history: HistoryEntry[];
   onSeek: (seconds: number) => void;
+  onRequestPermission?: () => void;
 }
 
 function trackKey(track: { title: string; artist: string }): string {
@@ -72,8 +73,10 @@ export function IpodDisplay({
   view,
   history,
   onSeek,
+  onRequestPermission,
 }: IpodDisplayProps) {
   const hasTrack = state.connected && state.title.length > 0;
+  const needsPermission = state.permissionGranted === false;
 
   return (
     <div className="ipod-display">
@@ -95,10 +98,24 @@ export function IpodDisplay({
       {view === "menu" ? (
         <MenuView state={state} history={history} />
       ) : !hasTrack ? (
-        <div className="ipod-display-empty">
-          <p className="empty-title">Abre un reproductor</p>
-          <p className="empty-sub">Spotify o Apple Music</p>
-        </div>
+        needsPermission ? (
+          <div className="ipod-display-empty">
+            <p className="empty-title">Activa el acceso</p>
+            <p className="empty-sub">Ajustes › Acceso a notificaciones</p>
+            <button
+              type="button"
+              className="permission-button"
+              onClick={onRequestPermission}
+            >
+              Permitir acceso
+            </button>
+          </div>
+        ) : (
+          <div className="ipod-display-empty">
+            <p className="empty-title">Abre un reproductor</p>
+            <p className="empty-sub">Spotify o Apple Music</p>
+          </div>
+        )
       ) : (
         <div className="now-playing">
           <div className="now-playing-main">

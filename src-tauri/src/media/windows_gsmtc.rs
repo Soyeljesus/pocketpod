@@ -2,7 +2,6 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 use base64::{engine::general_purpose, Engine as _};
-use serde::Serialize;
 use windows::core::Error;
 use windows_future::{AsyncStatus, IAsyncOperation};
 use windows::Media::Control::{
@@ -108,36 +107,7 @@ fn current_filetime_ticks() -> i64 {
     }
 }
 
-#[derive(Serialize, Clone)]
-pub struct MediaStateDto {
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    pub artwork_data_url: Option<String>,
-    pub status: String,
-    pub position_sec: f64,
-    pub duration_sec: f64,
-    pub can_seek: bool,
-    pub connected: bool,
-    pub source_app_id: Option<String>,
-}
-
-impl MediaStateDto {
-    fn empty() -> Self {
-        Self {
-            title: String::new(),
-            artist: String::new(),
-            album: String::new(),
-            artwork_data_url: None,
-            status: "unknown".to_string(),
-            position_sec: 0.0,
-            duration_sec: 0.0,
-            can_seek: false,
-            connected: false,
-            source_app_id: None,
-        }
-    }
-}
+use super::MediaStateDto;
 
 fn is_target_player(app_id: &str) -> bool {
     let id = app_id.to_lowercase();

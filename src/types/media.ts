@@ -32,6 +32,11 @@ export interface MediaState {
   connected: boolean;
   /** AppID crudo, útil para depurar. */
   sourceAppId: string | null;
+  /**
+   * En Android indica si la app tiene acceso a las notificaciones, necesario
+   * para leer y controlar Spotify/Apple Music. En escritorio es siempre true.
+   */
+  permissionGranted: boolean;
 }
 
 /** Canción que ya se ha reproducido durante esta instalación. */
@@ -53,4 +58,5 @@ export const EMPTY_MEDIA_STATE: MediaState = {
   canSeek: false,
   connected: false,
   sourceAppId: null,
+  permissionGranted: true,
 };

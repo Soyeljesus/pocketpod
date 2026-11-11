@@ -5,6 +5,9 @@ import { IpodShell } from "./components/ipod/IpodShell";
 import { IpodDisplay } from "./components/ipod/IpodDisplay";
 import type { IpodView } from "./components/ipod/IpodDisplay";
 import { ClickWheel } from "./components/ipod/ClickWheel";
+import { UpdatePrompt } from "./components/ipod/UpdatePrompt";
+import { useUpdateCheck } from "./hooks/useUpdateCheck";
+import { IS_ANDROID, openNotificationSettings } from "./services/mediaBridge";
 import "./styles/ipod.css";
 
 // Tamaño de diseño del iPod. La ventana puede encogerse hasta el mínimo
@@ -14,6 +17,9 @@ const IPOD_BASE_HEIGHT = 680;
 
 function computeScale(): number {
   if (typeof window === "undefined") return 1;
+  // En Android la carcasa ocupa toda la pantalla; el CSS móvil se encarga
+  // de repartir el espacio sin escalar el diseño de escritorio.
+  if (IS_ANDROID) return 1;
   return Math.min(
     window.innerWidth / IPOD_BASE_WIDTH,
     window.innerHeight / IPOD_BASE_HEIGHT,
@@ -39,6 +45,8 @@ function App() {
     useMediaSession();
   const [view, setView] = useState<IpodView>("nowPlaying");
   const scale = useIpodScale();
+  const { update, dismiss: dismissUpdate, install: installUpdate } =
+    useUpdateCheck();
 
   const handleMenu = () => {
     setView((current) => (current === "menu" ? "nowPlaying" : "menu"));
@@ -48,8 +56,12 @@ function App() {
     if (view === "menu") setView("nowPlaying");
   };
 
+  const requestPermission = () => {
+    void openNotificationSettings().catch(() => {});
+  };
+
   return (
-    <div className="app-root">
+    <div className={`app-root${IS_ANDROID ? " platform-android" : ""}`}>
       <div
         className="ipod-stage"
         style={{ "--ipod-scale": scale } as CSSProperties}
@@ -61,6 +73,7 @@ function App() {
             view={view}
             history={history}
             onSeek={seek}
+            onRequestPermission={requestPermission}
           />
           <ClickWheel
             isPlaying={state.status === "playing"}
@@ -71,6 +84,13 @@ function App() {
             onSelect={handleSelect}
           />
         </IpodShell>
+        {update && (
+          <UpdatePrompt
+            version={update.version}
+            onInstall={installUpdate}
+            onDismiss={dismissUpdate}
+          />
+        )}
       </div>
     </div>
   );

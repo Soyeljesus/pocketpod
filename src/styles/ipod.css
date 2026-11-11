@@ -30,6 +30,7 @@ html, body, #root {
    Así el máximo es exactamente el tamaño original y el mínimo conserva
    las proporciones. */
 .ipod-stage {
+  position: relative;
   width: 380px;
   height: 680px;
   flex: 0 0 auto;
@@ -555,3 +556,265 @@ html, body, #root {
 .label-bottom { bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 16px; }
 .label-left   { left: 20px; top: 50%; transform: translateY(-50%); font-size: 14px; }
 .label-right  { right: 20px; top: 50%; transform: translateY(-50%); font-size: 14px; }
+
+/* ---------- Aviso de permiso (Android) ---------- */
+.permission-button {
+  margin-top: 16px;
+  padding: 9px 18px;
+  border: 1px solid #2f6fbb;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+  background: linear-gradient(180deg, #5a9ee8 0%, #2f6fbb 100%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.permission-button:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.25);
+}
+
+/* ---------- Android: carcasa a pantalla completa ---------- */
+.app-root.platform-android {
+  height: 100vh;
+  height: 100dvh;
+  background: linear-gradient(160deg, #f8f9fb 0%, #e8e9ed 50%, #dadce1 100%);
+  overscroll-behavior: none;
+}
+
+.app-root.platform-android .ipod-stage {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  transform: none;
+  will-change: auto;
+}
+
+.app-root.platform-android .ipod-shell {
+  border-radius: 0;
+  border: none;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.app-root.platform-android .ipod-shell-inner {
+  border-radius: 0;
+  padding:
+    calc(env(safe-area-inset-top, 0px) + 10px)
+    calc(env(safe-area-inset-right, 0px) + 14px)
+    calc(env(safe-area-inset-bottom, 0px) + 10px)
+    calc(env(safe-area-inset-left, 0px) + 14px);
+  gap: 12px;
+  background: linear-gradient(160deg, #f8f9fb 0%, #e8e9ed 50%, #dadce1 100%);
+}
+
+.app-root.platform-android .ipod-titlebar,
+.app-root.platform-android .resize-grip {
+  display: none;
+}
+
+.app-root.platform-android .ipod-display {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.app-root.platform-android .ipod-display-header {
+  font-size: clamp(14px, 4.4vw, 19px);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.app-root.platform-android .click-wheel {
+  width: min(64vw, 286px);
+  height: min(64vw, 286px);
+  margin: 0 auto;
+  touch-action: manipulation;
+}
+
+.app-root.platform-android .click-wheel-hit,
+.app-root.platform-android .click-wheel-center {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.app-root.platform-android .click-wheel-label {
+  font-size: clamp(13px, 3.9vw, 16px);
+}
+.app-root.platform-android .label-bottom {
+  font-size: clamp(16px, 4.8vw, 20px);
+}
+
+.app-root.platform-android .now-playing {
+  justify-content: center;
+  gap: 18px;
+}
+
+.app-root.platform-android .now-playing-progress {
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.app-root.platform-android .ipod-artwork {
+  width: clamp(112px, 36vw, 168px);
+  height: clamp(112px, 36vw, 168px);
+}
+
+.app-root.platform-android .ipod-title {
+  font-size: clamp(17px, 5.2vw, 23px);
+}
+.app-root.platform-android .ipod-artist {
+  font-size: clamp(14px, 4.2vw, 18px);
+}
+.app-root.platform-android .ipod-album {
+  font-size: clamp(12px, 3.6vw, 16px);
+}
+.app-root.platform-android .track-progress-time {
+  min-width: 48px;
+  font-size: clamp(11px, 3.4vw, 14px);
+}
+.app-root.platform-android .track-progress-bar {
+  height: 14px;
+  border-radius: 7px;
+}
+.app-root.platform-android .track-progress-fill {
+  border-radius: 6px;
+}
+
+.app-root.platform-android .ipod-menu-row {
+  padding: 8px 7px;
+  gap: 12px;
+}
+.app-root.platform-android .ipod-menu-art {
+  width: 48px;
+  height: 48px;
+}
+.app-root.platform-android .ipod-menu-title {
+  font-size: clamp(13px, 4vw, 17px);
+}
+.app-root.platform-android .ipod-menu-artist {
+  font-size: clamp(11px, 3.4vw, 15px);
+}
+
+.app-root.platform-android .empty-title {
+  font-size: clamp(17px, 5vw, 22px);
+}
+.app-root.platform-android .empty-sub {
+  font-size: clamp(12px, 3.6vw, 16px);
+}
+.app-root.platform-android .permission-button {
+  margin-top: 20px;
+  padding: 11px 22px;
+  font-size: clamp(13px, 3.9vw, 16px);
+}
+
+/* ---------- Aviso de actualización ---------- */
+.update-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(18, 22, 30, 0.38);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.update-card {
+  width: 100%;
+  max-width: 280px;
+  padding: 18px 18px 16px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f2f3f6 100%);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 18px 38px rgba(0, 0, 0, 0.32),
+    inset 0 1px 0 #ffffff;
+  text-align: center;
+}
+
+.update-eyebrow {
+  margin: 0 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #7a8290;
+}
+
+.update-title {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1c1e22;
+}
+
+.update-text {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #4a5160;
+}
+
+.update-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.update-btn {
+  flex: 1 1 0;
+  padding: 9px 10px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.update-btn-ghost {
+  border: 1px solid #c4c9d3;
+  color: #4a5160;
+  background: linear-gradient(180deg, #ffffff 0%, #eef0f4 100%);
+}
+
+.update-btn-primary {
+  border: 1px solid #2f6fbb;
+  color: #ffffff;
+  background: linear-gradient(180deg, #5a9ee8 0%, #2f6fbb 100%);
+  box-shadow: 0 2px 6px rgba(47, 111, 187, 0.35);
+}
+
+.update-btn:active {
+  transform: translateY(1px);
+}
+
+/* En Android el aviso se adapta al tamaño de pantalla. */
+.app-root.platform-android .update-card {
+  max-width: 320px;
+  padding: 22px 20px 20px;
+  border-radius: 22px;
+}
+
+.app-root.platform-android .update-eyebrow {
+  font-size: clamp(10px, 3vw, 12px);
+}
+
+.app-root.platform-android .update-title {
+  font-size: clamp(18px, 5.4vw, 23px);
+}
+
+.app-root.platform-android .update-text {
+  font-size: clamp(13px, 3.9vw, 16px);
+}
+
+.app-root.platform-android .update-btn {
+  padding: 12px 12px;
+  font-size: clamp(13px, 3.9vw, 16px);
+}

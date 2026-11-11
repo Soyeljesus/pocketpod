@@ -34,7 +34,7 @@ PocketPod se conecta a la sesión del reproductor a través de los controles mul
 1. Entra en la página de [Releases](../../releases) del repositorio.
 2. Descarga el archivo según tu sistema:
    - **Windows**: `PocketPod_<versión>_x64-setup.exe` (recomendado) o `PocketPod_<versión>_x64_en-US.msi`.
-   - **Android**: `PocketPod_<versión>.apk`.
+   - **Android**: `PocketPod_<versión>_arm64.apk` (teléfonos de 64 bits, la mayoría desde 2017).
 3. En Windows, ejecuta el instalador y sigue el asistente.
 4. En Android, abre el APK y permite la instalación desde esta fuente si el sistema lo pregunta.
 
@@ -137,14 +137,14 @@ Para generar el base64 en PowerShell:
 
 ## Publicar una versión en GitHub
 
-El repositorio incluye un workflow de GitHub Actions (`.github/workflows/release.yml`) que compila la app de Windows y crea un borrador de release al empujar un tag:
+El repositorio incluye un workflow de GitHub Actions (`.github/workflows/release.yml`) que compila la app de Windows, genera la APK de Android firmada y crea un borrador de release al empujar un tag:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag -a v0.2.0 -m "PocketPod 0.2.0"
+git push origin v0.2.0
 ```
 
-Cuando termine el workflow, revisa el borrador en **Releases**, añade el APK de Android si lo has compilado aparte y publica el release.
+Cuando termine el workflow, el borrador incluirá el `.exe`, el `.msi` y `PocketPod_<versión>_arm64.apk`. Revísalo en **Releases** y publícalo: hasta que no lo publiques, las versiones anteriores no verán el aviso de actualización.
 
 ## Tecnologías
 

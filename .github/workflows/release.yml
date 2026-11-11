@@ -81,11 +81,32 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # El runner de Ubuntu ya trae el SDK de Android, build-tools 37 y el NDK 27.
+      # Solo instalamos lo que falte para no depender de una acción externa.
+      - name: Ensure Android SDK packages
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" 2>/dev/null || true
+          SM="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          need=0
+          [ -d "$ANDROID_HOME/platforms/android-37.0" ] || need=1
+          [ -d "$ANDROID_HOME/build-tools/37.0.0" ] || need=1
+          if [ "$need" = "1" ]; then
+            yes | "$SM" --licenses > /dev/null 2>&1 || true
+            "$SM" "platforms;android-37.0" "build-tools;37.0.0"
+          else
+            echo "platform 37.0 y build-tools 37.0.0 ya presentes"
+          fi
 
-      - name: Install Android packages
-        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "ndk;27.0.12077973"
+      - name: Select NDK
+        run: |
+          NDK_DIR="$(ls -d "$ANDROID_HOME"/ndk/27.* 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "$NDK_DIR" ]; then
+            echo "No hay ningún NDK 27 instalado en $ANDROID_HOME/ndk" >&2
+            exit 1
+          fi
+          echo "NDK seleccionado: $NDK_DIR"
+          echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: npm ci
@@ -110,8 +131,6 @@ jobs:
         run: chmod +x src-tauri/gen/android/gradlew
 
       - name: Build APK
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npm run tauri android build -- --apk --target aarch64
 
       - name: Rename APK

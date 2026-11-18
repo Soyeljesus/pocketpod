@@ -1,4 +1,13 @@
 <resources>
-    <string name="app_name">"PocketPod"</string>
-    <string name="main_activity_title">"PocketPod"</string>
+    <string name="app_name">"FoYu"</string>
+    <string name="main_activity_title">"FoYu"</string>
+    <string name="widget_compact_name">"FoYu compacto"</string>
+    <string name="widget_large_name">"FoYu grande"</string>
+    <string name="widget_compact_description">"Controla tu música desde una barra"</string>
+    <string name="widget_large_description">"Portada y controles de tu música"</string>
+    <string name="widget_idle">"Abre FoYu para escuchar"</string>
+    <string name="widget_play">"Reproducir"</string>
+    <string name="widget_pause">"Pausar"</string>
+    <string name="widget_next">"Siguiente"</string>
+    <string name="widget_previous">"Anterior"</string>
 </resources>

@@ -18,37 +18,110 @@ fn call<T: serde::de::DeserializeOwned>(
         .map_err(|err| err.to_string())
 }
 
-pub fn get_media_state(handle: &AndroidMediaHandle) -> MediaStateDto {
-    match call::<MediaStateDto>(handle, "getMediaState", ()) {
-        Ok(state) => state,
-        Err(err) => {
-            eprintln!("[PocketPod] getMediaState: {err}");
-            MediaStateDto::empty()
-        }
-    }
+const NOT_AVAILABLE: &str = "No disponible en Android";
+
+/// FoYu no lee la reproducción de otras apps en Android.
+pub fn get_media_state(_handle: &AndroidMediaHandle) -> MediaStateDto {
+    MediaStateDto::empty()
 }
 
-pub fn toggle_play_pause(handle: &AndroidMediaHandle) -> Result<(), String> {
-    call::<Option<serde_json::Value>>(handle, "togglePlayPause", ()).map(|_| ())
+pub fn toggle_play_pause(_handle: &AndroidMediaHandle) -> Result<(), String> {
+    Err(NOT_AVAILABLE.to_string())
 }
 
-pub fn skip_next(handle: &AndroidMediaHandle) -> Result<(), String> {
-    call::<Option<serde_json::Value>>(handle, "skipNext", ()).map(|_| ())
+pub fn skip_next(_handle: &AndroidMediaHandle) -> Result<(), String> {
+    Err(NOT_AVAILABLE.to_string())
 }
 
-pub fn skip_previous(handle: &AndroidMediaHandle) -> Result<(), String> {
-    call::<Option<serde_json::Value>>(handle, "skipPrevious", ()).map(|_| ())
+pub fn skip_previous(_handle: &AndroidMediaHandle) -> Result<(), String> {
+    Err(NOT_AVAILABLE.to_string())
 }
 
-pub fn seek_to(handle: &AndroidMediaHandle, seconds: f64) -> Result<(), String> {
+pub fn seek_to(_handle: &AndroidMediaHandle, _seconds: f64) -> Result<(), String> {
+    Err(NOT_AVAILABLE.to_string())
+}
+
+#[derive(serde::Deserialize)]
+struct SaveFileResult {
+    saved: bool,
+}
+
+pub fn save_text_file(
+    handle: &AndroidMediaHandle,
+    file_name: String,
+    content: String,
+    mime_type: String,
+) -> Result<bool, String> {
+    call::<SaveFileResult>(
+        handle,
+        "saveTextFile",
+        serde_json::json!({
+            "fileName": file_name,
+            "content": content,
+            "mimeType": mime_type,
+        }),
+    )
+    .map(|result| result.saved)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GoogleSignInResult {
+    id_token: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeTokenResult {
+    access_token: String,
+}
+
+pub fn google_sign_in(
+    handle: &AndroidMediaHandle,
+    client_id: String,
+    nonce: String,
+) -> Result<String, String> {
+    call::<GoogleSignInResult>(
+        handle,
+        "googleSignIn",
+        serde_json::json!({ "clientId": client_id, "nonce": nonce }),
+    )
+    .map(|result| result.id_token)
+}
+
+pub fn clear_google_credential(handle: &AndroidMediaHandle) -> Result<(), String> {
+    call::<Option<serde_json::Value>>(handle, "clearGoogleCredential", ()).map(|_| ())
+}
+
+pub fn youtube_access_token(
+    handle: &AndroidMediaHandle,
+    email: String,
+    interactive: bool,
+) -> Result<String, String> {
+    call::<YoutubeTokenResult>(
+        handle,
+        "youtubeAccessToken",
+        serde_json::json!({ "email": email, "interactive": interactive }),
+    )
+    .map(|result| result.access_token)
+}
+
+pub fn revoke_youtube_access(handle: &AndroidMediaHandle, email: String) -> Result<(), String> {
     call::<Option<serde_json::Value>>(
         handle,
-        "seekTo",
-        serde_json::json!({ "seconds": seconds }),
+        "revokeYoutubeAccess",
+        serde_json::json!({ "email": email, "interactive": false }),
     )
     .map(|_| ())
 }
 
-pub fn open_notification_settings(handle: &AndroidMediaHandle) -> Result<(), String> {
-    call::<Option<serde_json::Value>>(handle, "openNotificationSettings", ()).map(|_| ())
+pub fn update_widget(
+    handle: &AndroidMediaHandle,
+    state: crate::commands::WidgetState,
+) -> Result<(), String> {
+    call::<Option<serde_json::Value>>(handle, "updateWidget", state).map(|_| ())
+}
+
+pub fn leave_app(handle: &AndroidMediaHandle) -> Result<(), String> {
+    call::<Option<serde_json::Value>>(handle, "moveToBackground", ()).map(|_| ())
 }

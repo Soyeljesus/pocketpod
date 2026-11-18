@@ -22,7 +22,7 @@ export function UpdatePrompt({
     >
       <div className="update-card">
         <p className="update-eyebrow">Actualización</p>
-        <p className="update-title">PocketPod {version}</p>
+        <p className="update-title">FoYu {version}</p>
         <p className="update-text">
           Hay una versión nueva disponible. ¿Quieres actualizar ahora?
         </p>

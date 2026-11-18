@@ -26,12 +26,13 @@ function mapToFrontend(backendData: any): MediaState {
     canSeek: backendData.can_seek || false,
     connected: backendData.connected || false,
     sourceAppId: backendData.source_app_id || null,
-    // El backend de escritorio no envía este campo: allí no hace falta permiso.
-    permissionGranted: backendData.permission_granted ?? true,
   };
 }
 
 export async function fetchMediaState(): Promise<MediaState> {
+  // En Android FoYu solo conoce su propia reproducción.
+  if (IS_ANDROID) return EMPTY_MEDIA_STATE;
+
   try {
     const raw = await invoke<any>("get_media_state");
     return mapToFrontend(raw);
@@ -57,9 +58,27 @@ export async function seekTo(seconds: number): Promise<void> {
   await invoke("seek_to", { seconds });
 }
 
-/** Abre los ajustes de acceso a notificaciones (solo tiene efecto en Android). */
-export async function openNotificationSettings(): Promise<void> {
-  await invoke("open_notification_settings");
+export async function leaveApp(): Promise<void> {
+  await invoke("leave_app");
+}
+
+/** Guarda un archivo de texto y devuelve false si se cancela. */
+export async function saveTextFile(
+  fileName: string,
+  content: string,
+  mimeType: string,
+): Promise<boolean> {
+  if (IS_ANDROID) {
+    return invoke<boolean>("save_text_file", { fileName, content, mimeType });
+  }
+
+  const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  return true;
 }
 
 export async function subscribeMediaUpdates(

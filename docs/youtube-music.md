@@ -142,6 +142,11 @@ GET /search?q=daft%20punk&limit=20&t=<token>
     }
   ]
 
+GET /playlist?link=<enlace-o-id>&t=<token>
+→ {"id":"PL...","title":"Mi playlist","source":"Spotify","skipped":1,"tracks":[ ... ]}
+# Acepta YouTube Music, Spotify, Apple Music, Deezer y páginas públicas que
+# incluyan los datos de sus canciones. El audio siempre sale de YouTube Music.
+
 GET /stream/80ZRFkG37pU?t=<token>
 Range: bytes=0-1023
 → 206 Partial Content

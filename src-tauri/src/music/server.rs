@@ -4,7 +4,10 @@
 //!   GET    /health
 //!   GET    /search?q=<texto>&limit=<1..30>&t=<token>
 //!   GET    /stream/<videoId>?t=<token>      (soporta Range)
-//!   POST   /download/<videoId>?t=<token>    (metadatos en el cuerpo JSON)
+//!   GET    /playlist?link=<enlace o id>&t=<token>
+//!   POST   /library/export?t=<token>        (devuelve CSV)
+//!   POST   /library/import?t=<token>        (nombre y contenido del archivo)
+//!   POST /download/<videoId>?t=<token>    (metadatos en el cuerpo JSON)
 //!   GET    /offline?t=<token>
 //!   GET    /offline/<videoId>?t=<token>     (soporta Range, sin red)
 //!   DELETE /offline/<videoId>?t=<token>
@@ -19,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -29,12 +32,16 @@ use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tower_http::cors::CorsLayer;
 
+use super::importers::{external_url, import_url};
+use super::innertube::parse_playlist_id;
+use super::library::{export_csv, import_file, ExportRequest, ImportRequest};
 use super::{BridgeInfo, MusicEngine, OfflineTrack, ResolvedStream, Track};
 
 const SEARCH_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_SEARCH_CACHE: usize = 64;
 const MAX_STREAM_CACHE: usize = 128;
 const OFFLINE_INDEX: &str = "index.json";
+const MAX_LIBRARY_BYTES: usize = 24 * 1024 * 1024;
 const PROXY_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 /// Descargas locales. El índice vive en memoria y se persiste como JSON en la
@@ -310,6 +317,15 @@ fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/search", get(search))
         .route("/stream/{video_id}", get(stream))
+        .route("/playlist", get(playlist))
+        .route(
+            "/library/export",
+            post(export_library).layer(DefaultBodyLimit::max(MAX_LIBRARY_BYTES)),
+        )
+        .route(
+            "/library/import",
+            post(import_library).layer(DefaultBodyLimit::max(MAX_LIBRARY_BYTES)),
+        )
         .route("/download/{video_id}", post(download))
         .route("/offline", get(list_offline))
         .route("/offline/{video_id}", get(offline_stream).delete(delete_offline))
@@ -367,8 +383,74 @@ async fn search(
 }
 
 #[derive(Deserialize)]
+struct PlaylistParams {
+    link: Option<String>,
+    t: Option<String>,
+}
+
+async fn playlist(
+    State(state): State<AppState>,
+    Query(params): Query<PlaylistParams>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+
+    let link = params.link.unwrap_or_default();
+    if link.len() > 2048 {
+        return error(StatusCode::BAD_REQUEST, "Enlace demasiado largo");
+    }
+    let result = if let Some(url) = external_url(&link) {
+        import_url(&state.engine, url).await
+    } else {
+        let playlist_id = match parse_playlist_id(&link) {
+            Ok(id) => id,
+            Err(err) => return error(StatusCode::BAD_REQUEST, err),
+        };
+        state.engine.playlist(&playlist_id).await
+    };
+
+    match result {
+        Ok(playlist) => Json(playlist).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+#[derive(Deserialize)]
 struct TokenParams {
     t: Option<String>,
+}
+
+async fn export_library(
+    State(state): State<AppState>,
+    Query(params): Query<TokenParams>,
+    headers: HeaderMap,
+    Json(request): Json<ExportRequest>,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+    (
+        [(header::CONTENT_TYPE, "text/csv; charset=utf-8")],
+        export_csv(&request),
+    )
+        .into_response()
+}
+
+async fn import_library(
+    State(state): State<AppState>,
+    Query(params): Query<TokenParams>,
+    headers: HeaderMap,
+    Json(request): Json<ImportRequest>,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+    match import_file(&state.engine, request).await {
+        Ok(result) => Json(result).into_response(),
+        Err(err) => error(StatusCode::BAD_REQUEST, err),
+    }
 }
 
 async fn stream(
@@ -478,7 +560,7 @@ async fn proxy(
     Ok(response)
 }
 
-fn valid_video_id(video_id: &str) -> bool {
+pub(super) fn valid_video_id(video_id: &str) -> bool {
     video_id.len() == 11
         && video_id
             .chars()

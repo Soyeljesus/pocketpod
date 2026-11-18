@@ -1,0 +1,46 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(uid) {
+      return request.auth != null
+        && request.auth.uid == uid
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function isValidMeta() {
+      let data = request.resource.data;
+      return data.keys().hasOnly(['version', 'revision', 'chunkCount', 'updatedAt'])
+        && data.keys().hasAll(['version', 'revision', 'chunkCount', 'updatedAt'])
+        && data.version == 1
+        && data.revision is string && data.revision.size() <= 64
+        && data.chunkCount is int && data.chunkCount >= 1 && data.chunkCount <= 120
+        && data.updatedAt is int;
+    }
+
+    function isValidChunk(chunkId) {
+      let data = request.resource.data;
+      return chunkId.matches('^[0-9]{3}$')
+        && data.keys().hasOnly(['revision', 'index', 'data'])
+        && data.keys().hasAll(['revision', 'index', 'data'])
+        && data.revision is string && data.revision.size() <= 64
+        && data.index is int && data.index >= 0 && data.index < 120
+        && data.data is string && data.data.size() <= 240000;
+    }
+
+    match /users/{uid}/library/meta {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && isValidMeta();
+    }
+
+    match /users/{uid}/chunks/{chunkId} {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid) && isValidChunk(chunkId);
+    }
+
+    // Cualquier otra ruta queda cerrada.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -10,7 +10,10 @@
 //! un motor Kotlin (InnerTubeX, el de Vivi-Music) o un binario yt-dlp sin
 //! tocar el frontend ni el contrato HTTP.
 
+pub mod importers;
 pub mod innertube;
+pub mod library;
+pub mod youtube_account;
 pub mod server;
 
 use serde::{Deserialize, Serialize};
@@ -27,6 +30,18 @@ pub struct Track {
     pub album: String,
     pub duration_sec: f64,
     pub thumbnail_url: Option<String>,
+}
+
+/// Playlist pública importada. `skipped` cuenta las canciones de otro servicio
+/// que no se encontraron en YouTube Music.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedPlaylist {
+    pub id: String,
+    pub title: String,
+    pub source: String,
+    pub skipped: usize,
+    pub tracks: Vec<Track>,
 }
 
 /// Canción descargada para escuchar sin conexión. El audio vive en
@@ -96,4 +111,6 @@ pub trait MusicEngine: Send + Sync {
     async fn search(&self, query: &str, limit: usize) -> Result<Vec<Track>, String>;
 
     async fn resolve(&self, video_id: &str) -> Result<ResolvedStream, String>;
+
+    async fn playlist(&self, playlist_id: &str) -> Result<ImportedPlaylist, String>;
 }

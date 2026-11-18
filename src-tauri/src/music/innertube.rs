@@ -21,10 +21,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use reqwest::header::{ACCEPT_LANGUAGE, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT};
 use serde_json::{json, Value};
 
-use super::{MusicEngine, ResolvedStream, Track};
+use super::{ImportedPlaylist, MusicEngine, ResolvedStream, Track};
 
 const YOUTUBE: &str = "https://www.youtube.com";
 const YOUTUBE_MUSIC: &str = "https://music.youtube.com";
+/// Filtro "Canciones" de YouTube Music: deja fuera podcasts, audiolibros,
+/// álbumes, artistas y vídeos sueltos.
+const SONGS_FILTER: &str = "EgWKAQIIAWoMEA4QChADEAQQCRAF";
+const PODCAST_EPISODE: &str = "MUSIC_VIDEO_TYPE_PODCAST_EPISODE";
+const GREYED_OUT: &str = "MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT";
+/// Las charlas largas también aparecen como "canciones" en el catálogo.
+const MAX_SEARCH_SONG_SECONDS: f64 = 25.0 * 60.0;
+const MAX_PLAYLIST_TRACKS: usize = 2000;
+const MAX_PLAYLIST_PAGES: usize = 40;
 const WEB_REMIX_VERSION: &str = "1.20241127.01.00";
 const ANDROID_VR_VERSION: &str = "1.62.27";
 const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -116,6 +125,31 @@ impl InnerTube {
         }
         client
     }
+
+    async fn browse(&self, body: Value) -> Result<Value, String> {
+        let response = self
+            .http
+            .post(format!("{YOUTUBE_MUSIC}/youtubei/v1/browse?prettyPrint=false"))
+            .header(CONTENT_TYPE, "application/json")
+            .header(ORIGIN, YOUTUBE_MUSIC)
+            .header(REFERER, format!("{YOUTUBE_MUSIC}/"))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("No se pudo contactar con YouTube Music: {e}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!("YouTube Music respondió HTTP {status}"));
+        }
+
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Respuesta inválida de YouTube Music: {e}"))?;
+        self.remember_visitor(&value);
+        Ok(value)
+    }
 }
 
 #[async_trait::async_trait]
@@ -128,6 +162,7 @@ impl MusicEngine for InnerTube {
         let body = json!({
             "context": { "client": self.music_client() },
             "query": query,
+            "params": SONGS_FILTER,
         });
 
         let response = self
@@ -158,6 +193,56 @@ impl MusicEngine for InnerTube {
             return Err("Sin resultados para esa búsqueda".to_string());
         }
         Ok(tracks)
+    }
+
+    async fn playlist(&self, playlist_id: &str) -> Result<ImportedPlaylist, String> {
+        let first = self
+            .browse(json!({
+                "context": { "client": self.music_client() },
+                "browseId": format!("VL{playlist_id}"),
+            }))
+            .await?;
+
+        // Solo se lee el estante de la playlist: la misma página incluye
+        // sugerencias que no forman parte de ella.
+        let shelf = find_key(&first, "musicPlaylistShelfRenderer").ok_or_else(|| {
+            "No se pudo leer la playlist. Comprueba que sea pública o no listada.".to_string()
+        })?;
+
+        let title = playlist_title(&first).unwrap_or_else(|| "Playlist importada".to_string());
+        let mut seen = std::collections::HashSet::new();
+        let mut tracks = parse_tracks(shelf, MAX_PLAYLIST_TRACKS, &mut seen);
+        let mut token = find_continuation(shelf);
+        let mut pages = 0;
+
+        while let Some(continuation) = token {
+            if tracks.len() >= MAX_PLAYLIST_TRACKS || pages >= MAX_PLAYLIST_PAGES {
+                break;
+            }
+            pages += 1;
+
+            let page = self
+                .browse(json!({
+                    "context": { "client": self.music_client() },
+                    "continuation": continuation,
+                }))
+                .await?;
+            let remaining = MAX_PLAYLIST_TRACKS - tracks.len();
+            tracks.extend(parse_tracks(&page, remaining, &mut seen));
+            token = find_continuation(&page).filter(|next| *next != continuation);
+        }
+
+        if tracks.is_empty() {
+            return Err("La playlist no tiene canciones disponibles".to_string());
+        }
+
+        Ok(ImportedPlaylist {
+            id: playlist_id.to_string(),
+            title,
+            source: "YouTube Music".to_string(),
+            skipped: 0,
+            tracks,
+        })
     }
 
     async fn resolve(&self, video_id: &str) -> Result<ResolvedStream, String> {
@@ -467,14 +552,143 @@ fn stream_expiry(url: &str) -> Instant {
     Instant::now() + Duration::from_secs(ttl.max(30))
 }
 
+/// Extrae el id de un enlace de playlist o acepta el id pegado directamente.
+/// Nunca se visita el enlace: solo se usa el id contra la API de YouTube Music.
+pub fn parse_playlist_id(input: &str) -> Result<String, String> {
+    const INVALID: &str = "Pega el enlace de una playlist pública o no listada de YouTube Music";
+
+    let text = input.trim();
+    let from_link = text.match_indices("list=").find_map(|(index, key)| {
+        let boundary = text[..index].chars().last();
+        matches!(boundary, Some('?') | Some('&')).then(|| {
+            text[index + key.len()..]
+                .split(|c: char| c == '&' || c == '#' || c.is_whitespace())
+                .next()
+                .unwrap_or_default()
+        })
+    });
+    let raw = from_link.unwrap_or(text);
+    let id = raw.strip_prefix("VL").unwrap_or(raw);
+
+    let valid = (10..=128).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid {
+        return Err(INVALID.to_string());
+    }
+    if id.starts_with("RD") && !id.starts_with("RDCLAK") {
+        return Err("Las mezclas automáticas de YouTube no se pueden importar".to_string());
+    }
+    Ok(id.to_string())
+}
+
+fn find_key<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(map) => map
+            .get(key)
+            .or_else(|| map.values().find_map(|child| find_key(child, key))),
+        Value::Array(items) => items.iter().find_map(|child| find_key(child, key)),
+        _ => None,
+    }
+}
+
+fn find_continuation(value: &Value) -> Option<String> {
+    let token = find_key(value, "continuationCommand")
+        .and_then(|command| command.get("token"))
+        .or_else(|| {
+            find_key(value, "nextContinuationData").and_then(|data| data.get("continuation"))
+        })?;
+    token
+        .as_str()
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn playlist_title(value: &Value) -> Option<String> {
+    [
+        "musicResponsiveHeaderRenderer",
+        "musicDetailHeaderRenderer",
+        "musicEditablePlaylistDetailHeaderRenderer",
+    ]
+    .iter()
+    .find_map(|key| {
+        find_key(value, key)?
+            .pointer("/title/runs/0/text")?
+            .as_str()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_string)
+    })
+    .or_else(|| {
+        value
+            .pointer("/microformat/microformatDataRenderer/title")?
+            .as_str()
+            .map(|title| title.trim_end_matches(" - YouTube Music").trim().to_string())
+            .filter(|title| !title.is_empty())
+    })
+}
+
+fn is_excluded(item: &Value) -> bool {
+    const MUSIC_TYPE: &str =
+        "watchEndpoint/watchEndpointMusicSupportedConfigs/watchEndpointMusicConfig/musicVideoType";
+
+    let greyed_out = item
+        .get("musicItemRendererDisplayPolicy")
+        .and_then(Value::as_str)
+        == Some(GREYED_OUT);
+
+    let podcast = [
+        format!(
+            "/overlay/musicItemThumbnailOverlayRenderer/content/musicPlayButtonRenderer/playNavigationEndpoint/{MUSIC_TYPE}"
+        ),
+        format!(
+            "/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text/runs/0/navigationEndpoint/{MUSIC_TYPE}"
+        ),
+    ]
+    .iter()
+    .any(|path| item.pointer(path).and_then(Value::as_str) == Some(PODCAST_EPISODE));
+
+    greyed_out || podcast
+}
+
+/// Algunas narraciones están catalogadas como canciones. "podcast" solo se
+/// mira en artista y álbum para no descartar temas que se titulen así.
+pub(super) fn is_spoken_content(title: &str, artist: &str, album: &str) -> bool {
+    let credits = format!("{artist} {album}").to_lowercase();
+    let everything = format!("{title} {credits}").to_lowercase();
+    credits.contains("podcast")
+        || ["audiolibro", "audiobook", "audio libro", "audio book"]
+            .iter()
+            .any(|word| everything.contains(word))
+}
+
 fn parse_search(value: &Value, limit: usize) -> Vec<Track> {
+    let mut seen = std::collections::HashSet::new();
+    parse_tracks(value, usize::MAX, &mut seen)
+        .into_iter()
+        .filter(|track| track.duration_sec <= MAX_SEARCH_SONG_SECONDS)
+        .take(limit)
+        .collect()
+}
+
+fn parse_tracks(
+    value: &Value,
+    limit: usize,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<Track> {
     let mut renderers = Vec::new();
     collect_renderers(value, &mut renderers);
 
     let mut tracks = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    if limit == 0 {
+        return tracks;
+    }
 
     for item in renderers {
+        if is_excluded(item) {
+            continue;
+        }
         let Some(video_id) = video_id_of(item) else {
             continue;
         };
@@ -494,6 +708,10 @@ fn parse_search(value: &Value, limit: usize) -> Vec<Track> {
         let album = album_of(item)
             .or_else(|| parts.iter().find(|part| **part != artist).cloned())
             .unwrap_or_default();
+
+        if is_spoken_content(&title, &artist, &album) {
+            continue;
+        }
 
         tracks.push(Track {
             duration_sec: duration_of(item),
@@ -659,13 +877,24 @@ fn artist_of(item: &Value) -> Option<String> {
     stripped
         .rsplit_once(" - ")
         .map(|(_, artist)| artist.trim())
-        .filter(|artist| !artist.is_empty())
+        .filter(|artist| !artist.is_empty() && !is_spoken_duration(artist))
         .map(str::to_string)
 }
 
+/// En playlists la etiqueta puede acabar en "5 minutos y 1 segundo".
+fn is_spoken_duration(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.chars().any(|c| c.is_ascii_digit())
+        && ["minuto", "segundo", "hora", "minute", "second", "hour"]
+            .iter()
+            .any(|unit| lower.contains(unit))
+}
+
 fn album_of(item: &Value) -> Option<String> {
-    runs_values(item, 1)
+    // En búsquedas va en la segunda columna; en playlists, en la tercera.
+    [1, 2]
         .into_iter()
+        .flat_map(|column| runs_values(item, column))
         .find_map(|run| run_text(run, "MUSIC_PAGE_TYPE_ALBUM"))
         .map(str::to_string)
 }
@@ -724,6 +953,117 @@ fn thumbnail_of(item: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn list_item(video_id: &str, title: &str, music_type: &str) -> Value {
+        json!({
+            "musicResponsiveListItemRenderer": {
+                "playlistItemData": { "videoId": video_id },
+                "flexColumns": [{
+                    "musicResponsiveListItemFlexColumnRenderer": {
+                        "text": { "runs": [{
+                            "text": title,
+                            "navigationEndpoint": { "watchEndpoint": {
+                                "watchEndpointMusicSupportedConfigs": {
+                                    "watchEndpointMusicConfig": { "musicVideoType": music_type }
+                                }
+                            }}
+                        }]}
+                    }
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn reads_playlist_id_from_links() {
+        let id = "PLabcdefghij_1234-XYZ";
+        for input in [
+            format!("https://music.youtube.com/playlist?list={id}&si=abc"),
+            format!("https://www.youtube.com/watch?v=abc&list={id}#t"),
+            format!("  {id}  "),
+            format!("VL{id}"),
+        ] {
+            assert_eq!(parse_playlist_id(&input).as_deref(), Ok(id));
+        }
+    }
+
+    #[test]
+    fn rejects_unusable_playlist_links() {
+        for input in [
+            "",
+            "LM",
+            "https://music.youtube.com/watch?v=abc",
+            "https://example.com/?playlist=PLabcdefghij",
+            "PLabc/../../etc/passwd",
+        ] {
+            assert!(parse_playlist_id(input).is_err(), "{input}");
+        }
+        assert!(parse_playlist_id("list=RDabcdefghij12").is_err());
+        assert!(parse_playlist_id("RDCLAK5uy_abcdefghij").is_ok());
+    }
+
+    #[test]
+    fn skips_podcast_episodes_and_duplicates() {
+        let payload = json!([
+            list_item("song000001", "Canción", "MUSIC_VIDEO_TYPE_ATV"),
+            list_item("song000001", "Canción", "MUSIC_VIDEO_TYPE_ATV"),
+            list_item("podcast001", "Episodio", PODCAST_EPISODE),
+        ]);
+        let tracks = parse_search(&payload, 10);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].video_id, "song000001");
+    }
+
+    #[test]
+    fn ignores_spoken_duration_as_artist() {
+        let item = json!({
+            "overlay": { "musicItemThumbnailOverlayRenderer": { "content": {
+                "musicPlayButtonRenderer": { "accessibilityPlayData": {
+                    "accessibilityData": {
+                        "label": "Reproducir La Soledad - Banda - 5 minutos y 1 segundo"
+                    }
+                }}
+            }}}
+        });
+        assert_eq!(artist_of(&item), None);
+    }
+
+    #[test]
+    fn search_skips_very_long_audio() {
+        let mut long = list_item("talk000001", "Charla", "MUSIC_VIDEO_TYPE_ATV");
+        long["musicResponsiveListItemRenderer"]["fixedColumns"] = json!([{
+            "musicResponsiveListItemFixedColumnRenderer": {
+                "text": { "runs": [{ "text": "36:43" }] }
+            }
+        }]);
+        let payload = json!([long, list_item("song000001", "Canción", "MUSIC_VIDEO_TYPE_ATV")]);
+        let tracks = parse_search(&payload, 10);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].video_id, "song000001");
+    }
+
+    #[test]
+    fn detects_spoken_content_without_hiding_songs() {
+        assert!(is_spoken_content("Capítulo 1", "Audiolibros en Español", ""));
+        assert!(is_spoken_content("Episodio 4", "Mi Podcast", ""));
+        assert!(!is_spoken_content("Podcast", "Una Banda", "Un Disco"));
+    }
+
+    #[test]
+    fn reads_playlist_continuation_formats() {
+        let current = json!({ "contents": [{
+            "continuationItemRenderer": { "continuationEndpoint": {
+                "continuationCommand": { "token": "next-a" }
+            }}
+        }]});
+        assert_eq!(find_continuation(&current).as_deref(), Some("next-a"));
+
+        let legacy = json!({ "continuations": [{
+            "nextContinuationData": { "continuation": "next-b" }
+        }]});
+        assert_eq!(find_continuation(&legacy).as_deref(), Some("next-b"));
+        assert_eq!(find_continuation(&json!({ "contents": [] })), None);
+    }
 
     #[test]
     fn parses_minutes_and_hours() {

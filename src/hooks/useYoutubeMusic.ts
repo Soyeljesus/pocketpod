@@ -18,6 +18,7 @@ import {
 type PlaybackStatus = "playing" | "paused" | "stopped";
 
 const LIKES_KEY = "pocketpod.youtube.likes";
+const LIKES_UPDATED_KEY = "pocketpod.youtube.likes.updatedAt";
 
 function describeError(error: unknown): string {
   if (typeof error === "string") return error;
@@ -50,9 +51,18 @@ function loadLikes(): YoutubeTrack[] {
   }
 }
 
-function saveLikes(likes: YoutubeTrack[]) {
+function loadLikesUpdatedAt(): number {
+  try {
+    return Number(localStorage.getItem(LIKES_UPDATED_KEY) ?? 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveLikes(likes: YoutubeTrack[], updatedAt: number) {
   try {
     localStorage.setItem(LIKES_KEY, JSON.stringify(likes));
+    localStorage.setItem(LIKES_UPDATED_KEY, String(updatedAt));
   } catch {
     // Si localStorage no está disponible, los likes viven solo en memoria.
   }
@@ -73,6 +83,7 @@ export interface UseYoutubeMusicResult {
   unavailableReason: string | null;
   engine: string | null;
   likes: YoutubeTrack[];
+  likesUpdatedAt: number;
   downloads: OfflineTrack[];
   downloadingId: string | null;
   downloadError: string | null;
@@ -85,6 +96,8 @@ export interface UseYoutubeMusicResult {
   seek: (seconds: number) => void;
   pause: () => void;
   toggleLike: (track: YoutubeTrack) => void;
+  addLikes: (tracks: YoutubeTrack[]) => void;
+  replaceLikes: (tracks: YoutubeTrack[], updatedAt: number) => void;
   download: (track: YoutubeTrack) => void;
   removeDownload: (videoId: string) => void;
 }
@@ -117,6 +130,8 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
   const [duration, setDuration] = useState(0);
   const [bridge, setBridge] = useState<MusicBridgeInfo | null>(null);
   const [likes, setLikes] = useState<YoutubeTrack[]>(loadLikes);
+  const [likesUpdatedAt, setLikesUpdatedAt] = useState(loadLikesUpdatedAt);
+  const likesRef = useRef(likes);
   const [downloads, setDownloads] = useState<OfflineTrack[]>([]);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
@@ -300,16 +315,38 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     audioRef.current?.pause();
   }, []);
 
-  const toggleLike = useCallback((track: YoutubeTrack) => {
-    setLikes((previous) => {
+  const commitLikes = useCallback(
+    (next: YoutubeTrack[], updatedAt = Date.now()) => {
+      likesRef.current = next;
+      setLikes(next);
+      setLikesUpdatedAt(updatedAt);
+      saveLikes(next, updatedAt);
+    },
+    [],
+  );
+
+  const toggleLike = useCallback(
+    (track: YoutubeTrack) => {
+      const previous = likesRef.current;
       const exists = previous.some((item) => item.videoId === track.videoId);
-      const next = exists
-        ? previous.filter((item) => item.videoId !== track.videoId)
-        : [track, ...previous];
-      saveLikes(next);
-      return next;
-    });
-  }, []);
+      commitLikes(
+        exists
+          ? previous.filter((item) => item.videoId !== track.videoId)
+          : [track, ...previous],
+      );
+    },
+    [commitLikes],
+  );
+
+  const addLikes = useCallback(
+    (tracks: YoutubeTrack[]) => {
+      const previous = likesRef.current;
+      const known = new Set(previous.map((item) => item.videoId));
+      const fresh = tracks.filter((track) => !known.has(track.videoId));
+      if (fresh.length > 0) commitLikes([...previous, ...fresh]);
+    },
+    [commitLikes],
+  );
 
   const download = useCallback(
     (track: YoutubeTrack) => {
@@ -392,7 +429,6 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
       canSeek: connected,
       connected,
       sourceAppId: "youtube-music",
-      permissionGranted: true,
     };
   }, [current, status, position, duration]);
 
@@ -410,6 +446,7 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     unavailableReason: bridge?.message ?? null,
     engine: bridge?.engine ?? null,
     likes,
+    likesUpdatedAt,
     downloads,
     downloadingId,
     downloadError,
@@ -422,6 +459,8 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     seek,
     pause,
     toggleLike,
+    addLikes,
+    replaceLikes: commitLikes,
     download,
     removeDownload,
   };

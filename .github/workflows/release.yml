@@ -39,15 +39,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "PocketPod ${{ github.ref_name }}"
+          releaseName: "FoYu ${{ github.ref_name }}"
           releaseBody: |
-            PocketPod para Windows y Android.
+            FoYu para Windows y Android.
 
-            **Windows**: descarga `PocketPod_*_x64-setup.exe` (recomendado) o el `.msi`.
-            **Android**: descarga `PocketPod_<versión>_arm64.apk`.
+            **Windows**: descarga `FoYu_*_x64-setup.exe` (recomendado) o el `.msi`.
+            **Android**: descarga `FoYu_<versión>_arm64.apk`.
 
-            Requiere la app de escritorio/móvil de Spotify o Apple Music.
-            En Android, concede el acceso a notificaciones la primera vez.
+            Busca y escucha música, crea playlists, importa desde otros
+            servicios y exporta tu biblioteca. Tus datos se quedan en tu
+            dispositivo: esta versión no incluye cuenta ni copia en la nube.
+
+            Android puede avisar que la app no viene de Play Store.
+            FoYu no está afiliada a YouTube, Google, Spotify, Apple ni Deezer.
           releaseDraft: true
           prerelease: false
 
@@ -131,6 +135,13 @@ jobs:
         run: chmod +x src-tauri/gen/android/gradlew
 
       - name: Build APK
+        env:
+          VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+          VITE_GOOGLE_WEB_CLIENT_ID: ${{ vars.VITE_GOOGLE_WEB_CLIENT_ID }}
+          VITE_PRIVACY_POLICY_URL: ${{ vars.VITE_PRIVACY_POLICY_URL }}
         run: npm run tauri android build -- --apk --target aarch64
 
       - name: Rename APK
@@ -138,9 +149,9 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           APK_PATH="$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' -path '*release*' | head -n 1)"
           echo "APK: $APK_PATH"
-          cp "$APK_PATH" "PocketPod_${VERSION}_arm64.apk"
+          cp "$APK_PATH" "FoYu_${VERSION}_arm64.apk"
 
       - name: Attach APK to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" "PocketPod_${GITHUB_REF_NAME#v}_arm64.apk" --clobber
+        run: gh release upload "${GITHUB_REF_NAME}" "FoYu_${GITHUB_REF_NAME#v}_arm64.apk" --clobber

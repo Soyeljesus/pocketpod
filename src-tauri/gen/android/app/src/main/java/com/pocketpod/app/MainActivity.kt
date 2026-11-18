@@ -36,7 +36,9 @@ class MainActivity : TauriActivity() {
 
   private fun hideSystemBars() {
     WindowInsetsControllerCompat(window, window.decorView).apply {
-      hide(WindowInsetsCompat.Type.systemBars())
+      // Ocultar la barra de navegación obliga a deslizar dos veces para regresar.
+      hide(WindowInsetsCompat.Type.statusBars())
+      show(WindowInsetsCompat.Type.navigationBars())
       systemBarsBehavior =
         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     }

@@ -61,7 +61,12 @@ pub fn run() {
             commands::skip_next,
             commands::skip_previous,
             commands::seek_to,
-            commands::open_notification_settings,
+            commands::save_text_file,
+            commands::leave_app,
+            commands::google_sign_in,
+            commands::google_clear_credential,
+            commands::youtube_library_fetch,
+            commands::youtube_disconnect,
             commands::music_bridge_info
         ])
         .run(tauri::generate_context!())

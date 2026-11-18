@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ImportedCollection,
+  ImportedPlaylist,
+  LibraryImportResult,
   MusicBridgeInfo,
   OfflineTrack,
+  SavedPlaylist,
   YoutubeTrack,
 } from "../types/youtube";
 
@@ -34,7 +38,7 @@ function authQuery(info: MusicBridgeInfo): string {
   return `t=${encodeURIComponent(info.token)}`;
 }
 
-function normalizeTrack(raw: any): YoutubeTrack {
+export function normalizeTrack(raw: any): YoutubeTrack {
   return {
     videoId: String(raw?.videoId ?? raw?.video_id ?? ""),
     title: String(raw?.title ?? ""),
@@ -69,6 +73,82 @@ export async function searchYoutubeMusic(
   const data = await response.json();
   if (!Array.isArray(data)) return [];
   return data.map(normalizeTrack).filter((track) => track.videoId !== "");
+}
+
+/** Lee una playlist pública de YouTube Music, Spotify, Apple Music, Deezer u otra web. */
+export async function fetchPlaylist(link: string): Promise<ImportedPlaylist> {
+  const info = await getBridgeInfo();
+  if (!info.available) {
+    throw new Error(info.message ?? "YouTube Music no está disponible");
+  }
+
+  const params = new URLSearchParams({ link });
+  const response = await fetch(
+    `${info.baseUrl}/playlist?${params.toString()}&${authQuery(info)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(data?.error ?? `El puente respondió ${response.status}`);
+  }
+
+  return {
+    id: String(data?.id ?? ""),
+    title: String(data?.title ?? "Playlist importada"),
+    source: String(data?.source ?? "Enlace"),
+    skipped: Number(data?.skipped ?? 0) || 0,
+    tracks: (Array.isArray(data?.tracks) ? data.tracks : [])
+      .map(normalizeTrack)
+      .filter((track: YoutubeTrack) => track.videoId !== ""),
+  };
+}
+
+async function postLibrary(path: string, body: unknown): Promise<Response> {
+  const info = await getBridgeInfo();
+  if (!info.available) {
+    throw new Error(info.message ?? "La música no está disponible");
+  }
+  const response = await fetch(`${info.baseUrl}${path}?${authQuery(info)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.error ?? `El puente respondió ${response.status}`);
+  }
+  return response;
+}
+
+export async function exportLibraryCsv(library: {
+  playlists: SavedPlaylist[];
+  likes: YoutubeTrack[];
+  downloads: YoutubeTrack[];
+}): Promise<string> {
+  const response = await postLibrary("/library/export", library);
+  return response.text();
+}
+
+export async function importLibraryFile(
+  fileName: string,
+  content: string,
+): Promise<LibraryImportResult> {
+  const response = await postLibrary("/library/import", { fileName, content });
+  const data = await response.json();
+  return {
+    imported: Number(data?.imported ?? 0) || 0,
+    skipped: Number(data?.skipped ?? 0) || 0,
+    collections: (Array.isArray(data?.collections) ? data.collections : []).map(
+      (item: any): ImportedCollection => ({
+        id: String(item?.id ?? ""),
+        name: String(item?.name ?? "Playlist importada"),
+        kind: item?.kind === "likes" ? "likes" : "playlist",
+        source: String(item?.source ?? "Archivo"),
+        sourceLink: item?.sourceLink ?? null,
+        tracks: (Array.isArray(item?.tracks) ? item.tracks : []).map(normalizeTrack),
+      }),
+    ),
+  };
 }
 
 /** URL que se asigna directamente al elemento `<audio>`. */

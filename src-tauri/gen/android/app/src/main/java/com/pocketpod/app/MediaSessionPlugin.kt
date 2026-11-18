@@ -1,322 +1,222 @@
 package com.pocketpod.app
 
+import android.accounts.Account
 import android.app.Activity
-import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.media.MediaMetadata
-import android.media.session.MediaController
-import android.media.session.MediaSessionManager
-import android.media.session.PlaybackState
-import android.net.Uri
-import android.os.SystemClock
-import android.provider.Settings
-import android.util.Base64
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.core.content.ContextCompat
+import androidx.credentials.ClearCredentialStateRequest
+import androidx.credentials.CredentialManager
+import androidx.credentials.CredentialManagerCallback
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.credentials.GetCredentialResponse
+import androidx.credentials.exceptions.ClearCredentialException
+import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
+import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.AuthorizationResult
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.auth.api.identity.RevokeAccessRequest
+import com.google.android.gms.common.api.Scope
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
-import java.io.ByteArrayOutputStream
 
 @InvokeArg
-class SeekArgs {
-  var seconds: Double = 0.0
+class SaveFileArgs {
+  var fileName: String = "FoYu.csv"
+  var content: String = ""
+  var mimeType: String = "text/csv"
 }
 
-/**
- * Puente entre PocketPod y las sesiones multimedia de Android.
- *
- * Android no permite leer ni controlar la reproducción de otras apps sin el
- * permiso de acceso a notificaciones. Por eso el plugin comprueba ese permiso
- * y, si falta, el frontend muestra un aviso para activarlo.
- */
+@InvokeArg
+class GoogleSignInArgs {
+  var clientId: String = ""
+  var nonce: String = ""
+}
+
+@InvokeArg
+class YoutubeAccessArgs {
+  var email: String = ""
+  var interactive: Boolean = false
+}
+
+private const val YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/youtube.readonly"
+
+/** Funciones nativas de FoYu: archivos, cuenta y salida al segundo plano. */
 @TauriPlugin
 class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
-  private val manager: MediaSessionManager
-    get() = activity.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+  private var pendingFileContent: String? = null
 
-  private val listenerComponent: ComponentName
-    get() = ComponentName(activity, MediaNotificationListener::class.java)
-
-  // La portada se cachea por pista: decodificarla y comprimirla en cada
-  // sondeo (una vez por segundo) sería muy caro.
-  private var artworkCacheKey: String = "<none>"
-  private var artworkCacheValue: String = ""
-
-  private fun notificationAccessGranted(): Boolean {
-    val enabled = Settings.Secure.getString(
-      activity.contentResolver,
-      "enabled_notification_listeners",
-    ) ?: return false
-
-    return enabled.split(':').any { flattened ->
-      val component = ComponentName.unflattenFromString(flattened)
-      component?.packageName == activity.packageName
+  /** Abre el selector del sistema para que la persona elija dónde guardar. */
+  @Command
+  fun saveTextFile(invoke: Invoke) {
+    val args = invoke.parseArgs(SaveFileArgs::class.java)
+    pendingFileContent = args.content
+    val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+      addCategory(Intent.CATEGORY_OPENABLE)
+      type = args.mimeType
+      putExtra(Intent.EXTRA_TITLE, args.fileName)
     }
+    startActivityForResult(invoke, intent, "onSaveFilePicked")
   }
 
-  private fun isTargetPlayer(packageName: String): Boolean {
-    val id = packageName.lowercase()
-    return id.contains("spotify") || id.contains("apple") || id.contains("itunes")
-  }
-
-  private fun activeControllers(): List<MediaController> {
-    return try {
-      manager.getActiveSessions(listenerComponent)
-    } catch (_: Exception) {
-      emptyList()
-    }
-  }
-
-  private fun isPlaying(controller: MediaController): Boolean {
-    return controller.playbackState?.state == PlaybackState.STATE_PLAYING
-  }
-
-  /** Prioriza el reproductor que está sonando; después Spotify/Apple Music. */
-  private fun pickController(): MediaController? {
-    val controllers = activeControllers()
-    return controllers.firstOrNull { isPlaying(it) && isTargetPlayer(it.packageName) }
-      ?: controllers.firstOrNull { isPlaying(it) }
-      ?: controllers.firstOrNull { isTargetPlayer(it.packageName) }
-      ?: controllers.firstOrNull()
-  }
-
-  private fun metadataString(metadata: MediaMetadata?, key: String): String {
-    return metadata?.getString(key)?.trim().orEmpty()
-  }
-
-  private fun artworkDataUrl(metadata: MediaMetadata): String {
-    val artKey = listOf(
-      metadataString(metadata, MediaMetadata.METADATA_KEY_TITLE),
-      metadataString(metadata, MediaMetadata.METADATA_KEY_ARTIST),
-      metadataString(metadata, MediaMetadata.METADATA_KEY_ALBUM),
-    ).joinToString("|")
-
-    if (artKey == artworkCacheKey) {
-      return artworkCacheValue
+  @ActivityCallback
+  fun onSaveFilePicked(invoke: Invoke, result: ActivityResult) {
+    val content = pendingFileContent
+    pendingFileContent = null
+    val uri = result.data?.data
+    if (result.resultCode != Activity.RESULT_OK || uri == null || content == null) {
+      invoke.resolve(JSObject().put("saved", false))
+      return
     }
 
-    var bitmap: Bitmap? = metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
-      ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
-      ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+    Thread {
+      try {
+        val stream = activity.contentResolver.openOutputStream(uri, "wt")
+          ?: throw IllegalStateException("No se pudo abrir el archivo")
+        stream.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+        invoke.resolve(JSObject().put("saved", true))
+      } catch (error: Exception) {
+        invoke.reject(error.message ?: "No se pudo guardar el archivo")
+      }
+    }.start()
+  }
 
-    if (bitmap == null) {
-      val artUri = metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
-        ?: metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+  /** Muestra el selector nativo de cuentas de Google. */
+  @Command
+  fun googleSignIn(invoke: Invoke) {
+    val args = invoke.parseArgs(GoogleSignInArgs::class.java)
+    val option = GetSignInWithGoogleOption.Builder(args.clientId)
+      .setNonce(args.nonce)
+      .build()
+    val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
 
-      if (!artUri.isNullOrBlank()) {
-        try {
-          val uri = Uri.parse(artUri)
-          if (uri.scheme == "content" || uri.scheme == "file") {
-            bitmap = activity.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+    CredentialManager.create(activity).getCredentialAsync(
+      activity,
+      request,
+      null,
+      ContextCompat.getMainExecutor(activity),
+      object : CredentialManagerCallback<GetCredentialResponse, GetCredentialException> {
+        override fun onResult(result: GetCredentialResponse) {
+          val credential = result.credential
+          if (
+            credential is CustomCredential &&
+            credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+          ) {
+            val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
+            invoke.resolve(JSObject().put("idToken", idToken))
+          } else {
+            invoke.reject("google_invalid_credential")
           }
-        } catch (_: Exception) {
-          bitmap = null
         }
-      }
-    }
 
-    if (bitmap == null) {
-      artworkCacheKey = artKey
-      artworkCacheValue = ""
-      return ""
-    }
-
-    val maxSide = 320
-    val largest = maxOf(bitmap.width, bitmap.height)
-    val scaled = if (largest > maxSide) {
-      val ratio = maxSide.toFloat() / largest.toFloat()
-      Bitmap.createScaledBitmap(
-        bitmap,
-        (bitmap.width * ratio).toInt().coerceAtLeast(1),
-        (bitmap.height * ratio).toInt().coerceAtLeast(1),
-        true,
-      )
-    } else {
-      bitmap
-    }
-
-    val output = ByteArrayOutputStream()
-    scaled.compress(Bitmap.CompressFormat.JPEG, 82, output)
-    val encoded = "data:image/jpeg;base64," +
-      Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
-
-    artworkCacheKey = artKey
-    artworkCacheValue = encoded
-    return encoded
-  }
-
-  private fun playbackStatus(state: Int?): String {
-    return when (state) {
-      PlaybackState.STATE_PLAYING -> "playing"
-      PlaybackState.STATE_PAUSED,
-      PlaybackState.STATE_BUFFERING,
-      PlaybackState.STATE_CONNECTING,
-      PlaybackState.STATE_FAST_FORWARDING,
-      PlaybackState.STATE_REWINDING,
-      -> "paused"
-      PlaybackState.STATE_STOPPED,
-      PlaybackState.STATE_NONE,
-      PlaybackState.STATE_ERROR,
-      -> "stopped"
-      else -> "unknown"
-    }
-  }
-
-  private fun buildState(): JSObject {
-    val granted = notificationAccessGranted()
-    val result = JSObject()
-    result.put("title", "")
-    result.put("artist", "")
-    result.put("album", "")
-    result.put("artwork_data_url", "")
-    result.put("status", "unknown")
-    result.put("position_sec", 0.0)
-    result.put("duration_sec", 0.0)
-    result.put("can_seek", false)
-    result.put("connected", false)
-    result.put("source_app_id", "")
-    result.put("permission_granted", granted)
-
-    if (!granted) return result
-
-    val controller = pickController() ?: return result
-    val metadata = controller.metadata
-    val playback = controller.playbackState
-
-    val status = playbackStatus(playback?.state)
-    val durationMs = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
-    val durationSec = durationMs.toDouble() / 1000.0
-
-    var positionSec = (playback?.position ?: 0L).toDouble() / 1000.0
-    if (status == "playing" && playback != null) {
-      val lastUpdate = playback.lastPositionUpdateTime
-      if (lastUpdate > 0L) {
-        val elapsed = (SystemClock.elapsedRealtime() - lastUpdate).toDouble() / 1000.0
-        if (elapsed in 0.0..86_400.0) {
-          positionSec += elapsed
+        override fun onError(e: GetCredentialException) {
+          invoke.reject(
+            if (e is GetCredentialCancellationException) "google_cancelled"
+            else "google_unavailable",
+          )
         }
-      }
-    }
-    if (durationSec > 0.0) {
-      positionSec = positionSec.coerceIn(0.0, durationSec)
-    }
-
-    val canSeek = playback != null &&
-      (playback.actions and PlaybackState.ACTION_SEEK_TO) != 0L
-
-    result.put("title", metadataString(metadata, MediaMetadata.METADATA_KEY_TITLE))
-    result.put(
-      "artist",
-      metadataString(metadata, MediaMetadata.METADATA_KEY_ARTIST).ifEmpty {
-        metadataString(metadata, MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
       },
     )
-    result.put("album", metadataString(metadata, MediaMetadata.METADATA_KEY_ALBUM))
-    result.put("artwork_data_url", if (metadata != null) artworkDataUrl(metadata) else "")
-    result.put("status", status)
-    result.put("position_sec", positionSec)
-    result.put("duration_sec", durationSec)
-    result.put("can_seek", canSeek)
-    result.put("connected", true)
-    result.put("source_app_id", controller.packageName)
-
-    return result
   }
 
+  /** Olvida la cuenta elegida al cerrar sesión. */
   @Command
-  fun getMediaState(invoke: Invoke) {
-    try {
-      invoke.resolve(buildState())
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "No se pudo leer la sesión multimedia")
-    }
+  fun clearGoogleCredential(invoke: Invoke) {
+    CredentialManager.create(activity).clearCredentialStateAsync(
+      ClearCredentialStateRequest(),
+      null,
+      ContextCompat.getMainExecutor(activity),
+      object : CredentialManagerCallback<Void?, ClearCredentialException> {
+        override fun onResult(result: Void?) = invoke.resolve()
+        override fun onError(e: ClearCredentialException) = invoke.resolve()
+      },
+    )
   }
 
+  /** Pide permiso de solo lectura. El token dura poco y nunca se guarda. */
   @Command
-  fun togglePlayPause(invoke: Invoke) {
-    val controller = pickController()
-    if (controller == null) {
-      invoke.reject("No hay ningún reproductor activo")
-      return
+  fun youtubeAccessToken(invoke: Invoke) {
+    val args = invoke.parseArgs(YoutubeAccessArgs::class.java)
+    val builder = AuthorizationRequest.builder()
+      .setRequestedScopes(listOf(Scope(YOUTUBE_READONLY_SCOPE)))
+    if (args.email.isNotBlank()) {
+      builder.setAccount(Account(args.email, "com.google"))
     }
 
-    try {
-      if (isPlaying(controller)) {
-        controller.transportControls.pause()
-      } else {
-        controller.transportControls.play()
-      }
-      invoke.resolve()
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "No se pudo cambiar la reproducción")
-    }
-  }
-
-  @Command
-  fun skipNext(invoke: Invoke) {
-    val controller = pickController()
-    if (controller == null) {
-      invoke.reject("No hay ningún reproductor activo")
-      return
-    }
-    controller.transportControls.skipToNext()
-    invoke.resolve()
-  }
-
-  @Command
-  fun skipPrevious(invoke: Invoke) {
-    val controller = pickController()
-    if (controller == null) {
-      invoke.reject("No hay ningún reproductor activo")
-      return
-    }
-    controller.transportControls.skipToPrevious()
-    invoke.resolve()
-  }
-
-  @Command
-  fun seekTo(invoke: Invoke) {
-    val controller = pickController()
-    if (controller == null) {
-      invoke.reject("No hay ningún reproductor activo")
-      return
-    }
-
-    try {
-      val args = invoke.parseArgs(SeekArgs::class.java)
-      controller.transportControls.seekTo((args.seconds * 1000.0).toLong())
-      invoke.resolve()
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "No se pudo cambiar la posición")
-    }
-  }
-
-  @Command
-  fun openNotificationSettings(invoke: Invoke) {
-    try {
-      val component = ComponentName(activity, MediaNotificationListener::class.java)
-      val detail = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).apply {
-        putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, component.flattenToString())
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-      }
-
-      try {
-        activity.startActivity(detail)
-      } catch (_: Exception) {
-        val general = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    Identity.getAuthorizationClient(activity)
+      .authorize(builder.build())
+      .addOnSuccessListener { result ->
+        val pendingIntent = result.pendingIntent
+        when {
+          !result.hasResolution() -> resolveYoutubeToken(invoke, result)
+          !args.interactive || pendingIntent == null -> invoke.reject("youtube_consent_required")
+          else -> startIntentSenderForResult(
+            invoke,
+            IntentSenderRequest.Builder(pendingIntent.intentSender).build(),
+            "onYoutubeAuthorized",
+          )
         }
-        activity.startActivity(general)
       }
+      .addOnFailureListener { invoke.reject("youtube_authorization_failed") }
+  }
 
-      invoke.resolve()
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "No se pudieron abrir los ajustes")
+  @ActivityCallback
+  fun onYoutubeAuthorized(invoke: Invoke, result: ActivityResult) {
+    if (result.resultCode != Activity.RESULT_OK) {
+      invoke.reject("youtube_cancelled")
+      return
     }
+    try {
+      resolveYoutubeToken(
+        invoke,
+        Identity.getAuthorizationClient(activity).getAuthorizationResultFromIntent(result.data),
+      )
+    } catch (_: Exception) {
+      invoke.reject("youtube_authorization_failed")
+    }
+  }
+
+  private fun resolveYoutubeToken(invoke: Invoke, result: AuthorizationResult) {
+    val token = result.accessToken
+    if (token.isNullOrEmpty()) {
+      invoke.reject("youtube_authorization_failed")
+    } else {
+      invoke.resolve(JSObject().put("accessToken", token))
+    }
+  }
+
+  /** Retira de la cuenta de Google el permiso concedido a la app. */
+  @Command
+  fun revokeYoutubeAccess(invoke: Invoke) {
+    val args = invoke.parseArgs(YoutubeAccessArgs::class.java)
+    if (args.email.isBlank()) {
+      invoke.reject("youtube_account_missing")
+      return
+    }
+    val request = RevokeAccessRequest.builder()
+      .setAccount(Account(args.email, "com.google"))
+      .setScopes(listOf(Scope(YOUTUBE_READONLY_SCOPE)))
+      .build()
+    Identity.getAuthorizationClient(activity)
+      .revokeAccess(request)
+      .addOnSuccessListener { invoke.resolve() }
+      .addOnFailureListener { invoke.reject("youtube_revoke_failed") }
+  }
+
+  /** Sale a la pantalla anterior sin detener la música. */
+  @Command
+  fun moveToBackground(invoke: Invoke) {
+    activity.moveTaskToBack(true)
+    invoke.resolve()
   }
 }

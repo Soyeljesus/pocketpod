@@ -877,6 +877,69 @@ button.ipod-menu-row:hover {
   background: linear-gradient(180deg, #ff3b4e 0%, #d9001f 100%);
 }
 
+.design-toggle {
+  --toggle-size: 20px;
+  width: var(--toggle-size);
+  height: var(--toggle-size);
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: #2f3136;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.design-toggle-glyph {
+  width: 100%;
+  height: 100%;
+  display: block;
+  animation: design-toggle-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+}
+
+.design-toggle svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.design-toggle .glyph-cut,
+.design-toggle .glyph-bars {
+  fill: var(--toggle-cut, #ffffff);
+}
+
+.m-root .design-toggle {
+  --toggle-size: 34px;
+  padding: 5px;
+  border-radius: 12px;
+  color: var(--m-accent);
+  background: var(--m-surface);
+}
+
+.app-root.platform-android .ipod-display-header .design-toggle {
+  --toggle-size: 30px;
+  padding: 3px;
+}
+
+@keyframes design-toggle-in {
+  from {
+    opacity: 0;
+    transform: rotate(-70deg) scale(0.55);
+  }
+}
+
+.ipod-show-more {
+  justify-content: center;
+  font-weight: 700;
+}
+
+.ipod-search-btn:disabled {
+  opacity: 0.55;
+}
+
 .source-badge {
   display: inline-flex;
   align-items: center;
@@ -1177,7 +1240,7 @@ button.ipod-menu-row:hover {
 }
 
 .app-root.platform-android .ipod-row-action {
-  width: 40px;
+  width: 32px;
   height: 40px;
   font-size: 20px;
 }

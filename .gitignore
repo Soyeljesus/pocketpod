@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# PocketAll: binarios de extracción / sidecars (nunca al repo)
+/src-tauri/binaries/*
+!/src-tauri/binaries/README.md
+
+# Secretos y configuración local
+.env
+.env.*
+*.pem
+*.key
+keystore-base64.txt

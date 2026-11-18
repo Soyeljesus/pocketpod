@@ -6,7 +6,6 @@ use crate::media::windows_gsmtc as backend;
 #[cfg(target_os = "android")]
 use crate::media::android::{self as backend, AndroidMediaHandle};
 
-#[cfg(target_os = "android")]
 use tauri::State;
 
 // ---------------------------------------------------------------------------
@@ -86,4 +85,15 @@ pub fn seek_to(handle: State<'_, AndroidMediaHandle>, seconds: f64) -> Result<()
 #[tauri::command(async)]
 pub fn open_notification_settings(handle: State<'_, AndroidMediaHandle>) -> Result<(), String> {
     backend::open_notification_settings(&handle)
+}
+
+// ---------------------------------------------------------------------------
+// Puente de música (PocketAll)
+// ---------------------------------------------------------------------------
+
+/// Devuelve la URL y el token del servidor local de música. El frontend los
+/// usa para `/search` y para el `src` del elemento `<audio>`.
+#[tauri::command]
+pub fn music_bridge_info(info: State<'_, crate::music::BridgeInfo>) -> crate::music::BridgeInfo {
+    info.inner().clone()
 }

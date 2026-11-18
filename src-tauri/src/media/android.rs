@@ -115,6 +115,13 @@ pub fn revoke_youtube_access(handle: &AndroidMediaHandle, email: String) -> Resu
     .map(|_| ())
 }
 
+pub fn update_widget(
+    handle: &AndroidMediaHandle,
+    state: crate::commands::WidgetState,
+) -> Result<(), String> {
+    call::<Option<serde_json::Value>>(handle, "updateWidget", state).map(|_| ())
+}
+
 pub fn leave_app(handle: &AndroidMediaHandle) -> Result<(), String> {
     call::<Option<serde_json::Value>>(handle, "moveToBackground", ()).map(|_| ())
 }

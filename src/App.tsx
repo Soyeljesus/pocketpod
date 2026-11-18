@@ -3,6 +3,7 @@ import type { ChangeEvent, CSSProperties } from "react";
 import { onBackButtonPress } from "@tauri-apps/api/app";
 import { useMediaSession } from "./hooks/useMediaSession";
 import { looksLikeLink, usePlaylists } from "./hooks/usePlaylists";
+import { useArtworkPalette } from "./hooks/useArtworkAccent";
 import { useCloudSync } from "./hooks/useCloudSync";
 import { useYoutubeMusic } from "./hooks/useYoutubeMusic";
 import type { LibrarySnapshot } from "./services/librarySync";
@@ -23,6 +24,7 @@ import {
   IS_ANDROID,
   leaveApp,
   saveTextFile,
+  updateWidget,
 } from "./services/mediaBridge";
 import { exportLibraryCsv, importLibraryFile } from "./services/youtubeMusic";
 import type { AudioSource, YoutubeTrack } from "./types/youtube";
@@ -165,6 +167,28 @@ function App() {
   const isYoutube = source === "youtube";
   const state = isYoutube ? youtube.state : system.state;
   const positionSec = isYoutube ? youtube.positionSec : system.positionSec;
+  const palette = useArtworkPalette(state.artworkDataUrl);
+  const widgetPlaying = state.status === "playing";
+
+  useEffect(() => {
+    if (!IS_ANDROID) return;
+    void updateWidget({
+      title: state.title,
+      artist: state.artist,
+      artworkUrl: state.artworkDataUrl,
+      playing: widgetPlaying,
+      tint: palette.tint,
+      accent: palette.accent,
+    }).catch(() => {});
+  }, [
+    state.title,
+    state.artist,
+    state.artworkDataUrl,
+    widgetPlaying,
+    palette.tint,
+    palette.accent,
+  ]);
+
   const selectedPlaylist =
     playlistStore.playlists.find((item) => item.id === playlistId) ?? null;
 
@@ -273,6 +297,26 @@ function App() {
     if (isYoutube) youtube.seek(seconds);
     else void system.seek(seconds);
   };
+
+  const widgetActions = useRef({ playPause, skipNext, skipPrevious });
+  useEffect(() => {
+    widgetActions.current = { playPause, skipNext, skipPrevious };
+  });
+
+  useEffect(() => {
+    if (!IS_ANDROID) return;
+    const host = window as Window & {
+      __foyuWidget?: (action: string) => void;
+    };
+    host.__foyuWidget = (action) => {
+      if (action === "toggle") widgetActions.current.playPause();
+      if (action === "next") widgetActions.current.skipNext();
+      if (action === "previous") widgetActions.current.skipPrevious();
+    };
+    return () => {
+      delete host.__foyuWidget;
+    };
+  }, []);
 
   const openSearch = () => goTo("search");
   const openLikes = () => goTo("likes");
@@ -452,6 +496,11 @@ function App() {
             onPlayPause={playPause}
             onNext={skipNext}
             onPrevious={skipPrevious}
+            palette={palette}
+            shuffle={youtube.shuffle}
+            repeat={youtube.repeat}
+            onToggleShuffle={youtube.toggleShuffle}
+            onToggleRepeat={youtube.toggleRepeat}
           />
         ) : (
           <IpodShell theme="classic-white">

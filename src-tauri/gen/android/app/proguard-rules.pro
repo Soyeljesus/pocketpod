@@ -23,6 +23,7 @@
 # Tauri instancia los plugins de Android por nombre desde Rust (JNI), así que
 # R8 no debe eliminarlos ni renombrarlos al compilar en release.
 -keep class com.pocketpod.app.MediaSessionPlugin { *; }
+-keep class com.pocketpod.app.WidgetArgs { *; }
 -if class androidx.credentials.CredentialManager
 -keep class androidx.credentials.playservices.** { *; }
 -keep @app.tauri.annotation.TauriPlugin class * { *; }

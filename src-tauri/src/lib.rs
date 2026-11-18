@@ -61,6 +61,7 @@ pub fn run() {
             commands::skip_next,
             commands::skip_previous,
             commands::seek_to,
+            commands::widget_update,
             commands::save_text_file,
             commands::leave_app,
             commands::google_sign_in,

@@ -57,6 +57,30 @@ pub fn save_text_file(
 #[tauri::command(async)]
 pub fn leave_app() {}
 
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetState {
+    pub title: String,
+    pub artist: String,
+    pub artwork_url: Option<String>,
+    pub playing: bool,
+    pub tint: String,
+    pub accent: String,
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command(async)]
+pub fn widget_update(_state: WidgetState) {}
+
+#[cfg(target_os = "android")]
+#[tauri::command(async)]
+pub fn widget_update(
+    handle: State<'_, AndroidMediaHandle>,
+    state: WidgetState,
+) -> Result<(), String> {
+    backend::update_widget(&handle, state)
+}
+
 #[cfg(not(target_os = "android"))]
 const ANDROID_ONLY: &str = "Esta función está disponible por ahora en Android";
 

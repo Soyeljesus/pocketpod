@@ -3,6 +3,7 @@ package com.pocketpod.app
 import android.accounts.Account
 import android.app.Activity
 import android.content.Intent
+import android.webkit.WebView
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.core.content.ContextCompat
@@ -29,12 +30,23 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.lang.ref.WeakReference
 
 @InvokeArg
 class SaveFileArgs {
   var fileName: String = "FoYu.csv"
   var content: String = ""
   var mimeType: String = "text/csv"
+}
+
+@InvokeArg
+class WidgetArgs {
+  var title: String = ""
+  var artist: String = ""
+  var artworkUrl: String? = null
+  var playing: Boolean = false
+  var tint: String = ""
+  var accent: String = ""
 }
 
 @InvokeArg
@@ -55,6 +67,44 @@ private const val YOUTUBE_READONLY_SCOPE = "https://www.googleapis.com/auth/yout
 @TauriPlugin
 class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
   private var pendingFileContent: String? = null
+  private var page: WeakReference<WebView>? = null
+
+  override fun load(webView: WebView) {
+    super.load(webView)
+    page = WeakReference(webView)
+    current = WeakReference(this)
+    FoYuWidgets.refresh(activity)
+  }
+
+  override fun onDestroy() {
+    if (current?.get() === this) current = null
+    FoYuWidgets.refresh(activity)
+    super.onDestroy()
+  }
+
+  private fun runWidgetAction(action: String): Boolean {
+    val view = page?.get() ?: return false
+    view.post {
+      view.evaluateJavascript("window.__foyuWidget && window.__foyuWidget('$action')", null)
+    }
+    return true
+  }
+
+  /** Muestra en los widgets lo que está sonando. */
+  @Command
+  fun updateWidget(invoke: Invoke) {
+    val args = invoke.parseArgs(WidgetArgs::class.java)
+    FoYuWidgets.update(
+      activity,
+      args.title,
+      args.artist,
+      args.artworkUrl.orEmpty(),
+      args.playing,
+      args.tint,
+      args.accent,
+    )
+    invoke.resolve()
+  }
 
   /** Abre el selector del sistema para que la persona elija dónde guardar. */
   @Command
@@ -211,6 +261,17 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
       .revokeAccess(request)
       .addOnSuccessListener { invoke.resolve() }
       .addOnFailureListener { invoke.reject("youtube_revoke_failed") }
+  }
+
+  companion object {
+    private var current: WeakReference<MediaSessionPlugin>? = null
+
+    fun isRunning(): Boolean = current?.get() != null
+
+    fun sendWidgetAction(action: String): Boolean {
+      if (action !in setOf("toggle", "next", "previous")) return false
+      return current?.get()?.runWidgetAction(action) == true
+    }
   }
 
   /** Sale a la pantalla anterior sin detener la música. */

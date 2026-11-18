@@ -58,6 +58,20 @@ export async function seekTo(seconds: number): Promise<void> {
   await invoke("seek_to", { seconds });
 }
 
+export interface WidgetState {
+  title: string;
+  artist: string;
+  artworkUrl: string | null;
+  playing: boolean;
+  tint: string;
+  accent: string;
+}
+
+/** Actualiza los widgets de la pantalla de inicio de Android. */
+export async function updateWidget(state: WidgetState): Promise<void> {
+  await invoke("widget_update", { state });
+}
+
 export async function leaveApp(): Promise<void> {
   await invoke("leave_app");
 }

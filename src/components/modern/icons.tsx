@@ -37,6 +37,8 @@ const PATHS = {
   user: <path d="M12 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0 10c4.4 0 8 2.1 8 4.7V20H4v-1.3C4 16.1 7.6 14 12 14Z" />,
   plus: <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />,
   more: <path d="M12 4.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm0 5.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm0 5.5a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z" />,
+  repeat: <path d="M17 2.5 21 6.5l-4 4V7.5H7V11H5V5.5h12zM7 21.5l-4-4 4-4v3h10V13h2v5.5H7z" />,
+  queue: <path d="M3 5h14v2H3zm0 6h14v2H3zm0 6h9v2H3zm12-1v6l6-3z" />,
   note: <path d="M19 3v12.5a3.5 3.5 0 1 1-2-3.2V7.6l-8 1.8v8.1a3.5 3.5 0 1 1-2-3.2V5.8z" />,
 } satisfies Record<string, ReactNode>;
 

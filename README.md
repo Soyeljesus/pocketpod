@@ -12,6 +12,8 @@ El nombre viene de **F** de *free* y **Y** de *YouTube*, y suena como *for you*.
 - **Diseño iPod clásico** con rueda click. El icono junto a `YT` cambia de un diseño a otro.
 - Búsqueda y reproducción de canciones desde YouTube Music.
 - **Me gusta** y descargas para escuchar sin conexión.
+- **Reproductor con el color de la portada**, cola, modo aleatorio y repetición.
+- **Widgets para Android**, compacto y grande, con portada y controles.
 - **Playlists propias**: créalas, añade canciones y quítalas cuando quieras.
 - **Importación por enlace** desde playlists públicas de Spotify, Apple Music, Deezer y YouTube Music.
 - **Exportación e importación de archivos**: exporta en CSV e importa CSV, TSV, M3U, M3U8, XSPF, JSON o TXT.
@@ -78,6 +80,7 @@ La conexión usa YouTube Data API con el permiso `youtube.readonly`:
 - **Exportar** guarda tu biblioteca en un archivo CSV. No incluye el audio.
 - **Importar archivo** suma canciones sin borrar las que ya tienes.
 - Las descargas, los Me gusta y las playlists se conservan al actualizar FoYu. Si la desinstalas, Android los borra del teléfono.
+- Para añadir un widget en Android, mantén pulsada la pantalla de inicio, entra en **Widgets** y busca **FoYu**. Si Android cerró la app, el widget te pedirá abrirla.
 - En Android, deslizar desde un borde regresa a la pantalla anterior. En la pantalla principal, la app pasa a segundo plano.
 
 Cuando importas desde otro servicio, FoYu busca cada canción por título, artista y duración, y el audio sale de YouTube Music. Una canción puede no encontrarse o aparecer en otra versión.
@@ -154,8 +157,8 @@ En **GitHub → Settings → Secrets and variables → Actions** configura:
 Después crea un tag con la versión de `package.json`:
 
 ```bash
-git tag -a v0.3.0 -m "FoYu 0.3.0"
-git push origin v0.3.0
+git tag -a v0.4.0 -m "FoYu 0.4.0"
+git push origin v0.4.0
 ```
 
 El workflow crea un borrador con los instaladores de Windows y la APK de Android. Revísalo y publícalo desde GitHub.
@@ -174,6 +177,7 @@ FoYu no está afiliada a YouTube, Google, Spotify, Apple ni Deezer. La reproducc
 
 - [Tauri 2](https://tauri.app/) y Rust
 - React 19, TypeScript y Vite
+- Fuentes Inter y Outfit (licencia SIL OFL), incluidas en la app
 - Firebase Authentication y Cloud Firestore
 - Android Credential Manager y Google Identity
 - YouTube Data API v3

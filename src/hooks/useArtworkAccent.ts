@@ -1,6 +1,52 @@
 import { useEffect, useState } from "react";
 
-export const DEFAULT_ACCENT = "hsl(228 92% 80%)";
+export interface ArtworkPalette {
+  /** Color claro para botones y elementos activos. */
+  accent: string;
+  /** Color intenso para el reproductor y el minirreproductor. */
+  tint: string;
+  /** Color oscuro con el que termina el fondo del reproductor. */
+  deep: string;
+}
+
+function hslToHex(hue: number, saturation: number, lightness: number): string {
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const sector = hue / 60;
+  const second = chroma * (1 - Math.abs((sector % 2) - 1));
+  const [red, green, blue] =
+    sector < 1
+      ? [chroma, second, 0]
+      : sector < 2
+        ? [second, chroma, 0]
+        : sector < 3
+          ? [0, chroma, second]
+          : sector < 4
+            ? [0, second, chroma]
+            : sector < 5
+              ? [second, 0, chroma]
+              : [chroma, 0, second];
+  const match = lightness - chroma / 2;
+  return `#${[red, green, blue]
+    .map((value) =>
+      Math.round((value + match) * 255)
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("")}`;
+}
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+function paletteFrom(hue: number, saturation: number): ArtworkPalette {
+  return {
+    accent: hslToHex(hue, clamp(saturation, 0.55, 0.9), 0.82),
+    tint: hslToHex(hue, clamp(saturation, 0.38, 0.62), 0.3),
+    deep: hslToHex(hue, clamp(saturation, 0.28, 0.5), 0.115),
+  };
+}
+
+export const DEFAULT_PALETTE = paletteFrom(224, 0.62);
 
 function toHsl(r: number, g: number, b: number): [number, number, number] {
   const red = r / 255;
@@ -22,7 +68,7 @@ function toHsl(r: number, g: number, b: number): [number, number, number] {
   return [hue * 60, saturation, lightness];
 }
 
-function accentFromImage(image: HTMLImageElement): string | null {
+function paletteFromImage(image: HTMLImageElement): ArtworkPalette | null {
   const size = 20;
   const canvas = document.createElement("canvas");
   canvas.width = size;
@@ -44,19 +90,16 @@ function accentFromImage(image: HTMLImageElement): string | null {
     }
   }
   if (!best || bestScore < 0.12) return null;
-
-  // Tono de la portada con luz fija para que siga legible sobre fondo oscuro.
-  const saturation = Math.round(Math.min(0.9, Math.max(0.55, best[1])) * 100);
-  return `hsl(${Math.round(best[0])} ${saturation}% 74%)`;
+  return paletteFrom(best[0], best[1]);
 }
 
-/** Color de acento de la portada. Si no se puede leer, usa el color base. */
-export function useArtworkAccent(url: string | null): string {
-  const [accent, setAccent] = useState(DEFAULT_ACCENT);
+/** Colores de la portada. Si no se pueden leer, usa los colores de FoYu. */
+export function useArtworkPalette(url: string | null): ArtworkPalette {
+  const [palette, setPalette] = useState(DEFAULT_PALETTE);
 
   useEffect(() => {
     if (!url) {
-      setAccent(DEFAULT_ACCENT);
+      setPalette(DEFAULT_PALETTE);
       return;
     }
 
@@ -66,13 +109,13 @@ export function useArtworkAccent(url: string | null): string {
     image.onload = () => {
       if (!alive) return;
       try {
-        setAccent(accentFromImage(image) ?? DEFAULT_ACCENT);
+        setPalette(paletteFromImage(image) ?? DEFAULT_PALETTE);
       } catch {
-        setAccent(DEFAULT_ACCENT);
+        setPalette(DEFAULT_PALETTE);
       }
     };
     image.onerror = () => {
-      if (alive) setAccent(DEFAULT_ACCENT);
+      if (alive) setPalette(DEFAULT_PALETTE);
     };
     image.src = url;
 
@@ -81,5 +124,5 @@ export function useArtworkAccent(url: string | null): string {
     };
   }, [url]);
 
-  return accent;
+  return palette;
 }

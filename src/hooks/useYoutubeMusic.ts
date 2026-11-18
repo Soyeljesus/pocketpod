@@ -87,6 +87,10 @@ export interface UseYoutubeMusicResult {
   downloads: OfflineTrack[];
   downloadingId: string | null;
   downloadError: string | null;
+  shuffle: boolean;
+  repeat: boolean;
+  toggleShuffle: () => void;
+  toggleRepeat: () => void;
   setQuery: (query: string) => void;
   search: () => Promise<void>;
   playTrack: (track: YoutubeTrack, queue?: YoutubeTrack[]) => Promise<void>;
@@ -117,7 +121,11 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
   const resultsRef = useRef<YoutubeTrack[]>([]);
   const downloadsRef = useRef<OfflineTrack[]>([]);
   const nextRef = useRef<() => void>(() => {});
+  const shuffleRef = useRef(false);
+  const repeatRef = useRef(false);
 
+  const [shuffle, setShuffle] = useState(false);
+  const [repeat, setRepeat] = useState(false);
   const [current, setCurrent] = useState<YoutubeTrack | null>(null);
   const [queue, setQueue] = useState<YoutubeTrack[]>([]);
   const [results, setResults] = useState<YoutubeTrack[]>([]);
@@ -144,7 +152,14 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
 
     audio.addEventListener("play", () => setStatus("playing"));
     audio.addEventListener("pause", () => setStatus("paused"));
-    audio.addEventListener("ended", () => nextRef.current());
+    audio.addEventListener("ended", () => {
+      if (repeatRef.current) {
+        audio.currentTime = 0;
+        void audio.play().catch(() => nextRef.current());
+      } else {
+        nextRef.current();
+      }
+    });
     audio.addEventListener("loadedmetadata", () => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
         setDuration(audio.duration);
@@ -265,9 +280,23 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
 
     const currentId = currentRef.current?.videoId;
     const index = list.findIndex((track) => track.videoId === currentId);
-    const following = index >= 0 ? list[(index + 1) % list.length] : list[0];
-    void playTrack(following);
+    let followingIndex = index >= 0 ? (index + 1) % list.length : 0;
+    if (shuffleRef.current && list.length > 1) {
+      const offset = 1 + Math.floor(Math.random() * (list.length - 1));
+      followingIndex = (Math.max(index, 0) + offset) % list.length;
+    }
+    void playTrack(list[followingIndex]);
   }, [playTrack]);
+
+  const toggleShuffle = useCallback(() => {
+    shuffleRef.current = !shuffleRef.current;
+    setShuffle(shuffleRef.current);
+  }, []);
+
+  const toggleRepeat = useCallback(() => {
+    repeatRef.current = !repeatRef.current;
+    setRepeat(repeatRef.current);
+  }, []);
 
   useEffect(() => {
     nextRef.current = next;
@@ -450,6 +479,10 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     downloads,
     downloadingId,
     downloadError,
+    shuffle,
+    repeat,
+    toggleShuffle,
+    toggleRepeat,
     setQuery,
     search,
     playTrack,

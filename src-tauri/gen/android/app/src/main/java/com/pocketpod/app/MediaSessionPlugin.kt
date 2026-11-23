@@ -47,6 +47,8 @@ class WidgetArgs {
   var playing: Boolean = false
   var tint: String = ""
   var accent: String = ""
+  var positionMs: Long = 0
+  var durationMs: Long = 0
 }
 
 @InvokeArg
@@ -102,6 +104,8 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
       args.playing,
       args.tint,
       args.accent,
+      args.positionMs,
+      args.durationMs,
     )
     invoke.resolve()
   }
@@ -268,8 +272,11 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
     fun isRunning(): Boolean = current?.get() != null
 
+    private val ACTIONS = setOf("toggle", "play", "pause", "next", "previous", "rewind", "forward")
+    private val SEEK = Regex("^seek:\\d{1,6}$")
+
     fun sendWidgetAction(action: String): Boolean {
-      if (action !in setOf("toggle", "next", "previous")) return false
+      if (action !in ACTIONS && !SEEK.matches(action)) return false
       return current?.get()?.runWidgetAction(action) == true
     }
   }

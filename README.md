@@ -9,11 +9,21 @@ El nombre viene de **F** de *free* y **Y** de *YouTube*, y suena como *for you*.
 ## Características
 
 - **Diseño moderno** al abrir la app, con colores tomados de la portada.
+- **En Windows, ventana grande** al estilo de un reproductor de escritorio: menú y playlists a la izquierda, perfil o cola a la derecha y reproductor abajo con volumen.
 - **Diseño iPod clásico** con rueda click. El icono junto a `YT` cambia de un diseño a otro.
-- Búsqueda y reproducción de canciones desde YouTube Music.
+- **Tema oscuro, claro o el del sistema**, en Perfil.
+- **Inicio para descubrir música**: estados de ánimo (Triste, Relax, Fiesta…), listas de la comunidad más escuchadas, géneros y álbumes de YouTube Music. Puedes abrir cualquier lista, reproducirla y guardarla en tu biblioteca.
+- **Mezclas personales**: «Selecciones», «Sigue escuchando» y «Similares a» tu artista favorito, armadas con tus Me gusta y lo que escuchaste. Se calculan en tu dispositivo.
+- **Explorar**: todos los géneros y estados de ánimo.
+- **Menú de cuenta**: al tocar tu foto aparecen Cuenta, Configuración y Sobre FoYu.
+- **Búsqueda mientras escribes**: sugerencias y canciones aparecen sin pulsar Buscar.
 - **Me gusta** y descargas para escuchar sin conexión.
-- **Reproductor con el color de la portada**, cola, modo aleatorio y repetición.
-- **Widgets para Android**, compacto y grande, con portada y controles.
+- **Reproductor con el color de la portada** y repetición.
+- **Cola**: «Reproducir a continuación» y «Añadir a la cola» en las opciones de cada canción. Puedes quitar o saltar canciones de la cola.
+- **Aleatorio y aleatorio inteligente**: el inteligente reproduce 3 canciones al azar de la lista donde lo activaste y después una recomendada parecida a esa lista.
+- **Reproductor en las notificaciones y la pantalla de bloqueo** de Android, con barra para adelantar o regresar. También responde a los botones de auriculares.
+- **Widgets para Android**, compacto y grande, con portada, controles, tiempo y botones para retroceder o adelantar 10 segundos.
+- **Perfil** con tu nombre y la foto que elijas. Junto a tu foto aparece **Actualizar** cuando hay una versión nueva.
 - **Playlists propias**: créalas, añade canciones y quítalas cuando quieras.
 - **Importación por enlace** desde playlists públicas de Spotify, Apple Music, Deezer y YouTube Music.
 - **Exportación e importación de archivos**: exporta en CSV e importa CSV, TSV, M3U, M3U8, XSPF, JSON o TXT.
@@ -23,16 +33,19 @@ El nombre viene de **F** de *free* y **Y** de *YouTube*, y suena como *for you*.
 
 Las versiones publicadas en [Releases](../../releases) **no incluyen cuenta ni copia en la nube**. Tu biblioteca se guarda en tu dispositivo. Para llevarla a otro, usa **Exportar** e **Importar archivo**.
 
-En Android, FoYu solo pide acceso a Internet. No lee tus notificaciones, contactos ni fotos.
+En Android, FoYu usa acceso a Internet y un servicio de reproducción en primer plano. Este servicio mantiene la música sonando con la pantalla apagada y muestra el reproductor en las notificaciones. No pide permisos que tengas que aceptar y no lee tus notificaciones, contactos ni fotos.
+
+La foto de perfil se recorta y se guarda pequeña, sin los datos de ubicación o cámara de la imagen original.
 
 ## Cuenta con Google (en desarrollo)
 
-El código incluye una cuenta opcional para Android, pero solo aparece en compilaciones configuradas con Firebase. Aún no está abierta al público.
+El código incluye una cuenta opcional para Android y Windows, pero solo aparece en compilaciones configuradas con Firebase. Aún no está abierta al público.
 
 Con la cuenta activa:
 
 - Firebase Authentication gestiona tu cuenta de Google.
-- Cloud Firestore guarda tus playlists, tus Me gusta y datos técnicos de sincronización.
+- En Windows, el inicio de sesión se abre en tu navegador y vuelve a FoYu de forma segura (PKCE).
+- Cloud Firestore guarda tus playlists, tus Me gusta, tu nombre, tu foto de perfil y datos técnicos de sincronización. Lo que marcas en el teléfono aparece en el PC y al revés.
 - Las reglas de Firestore permiten que cada cuenta acceda solo a sus datos.
 - FoYu no recibe tu contraseña de Google.
 - Firestore no guarda tu correo, contraseña ni tokens.
@@ -74,7 +87,9 @@ La conexión usa YouTube Data API con el permiso `youtube.readonly`:
 ## Uso
 
 - **Inicio** abre el menú principal.
-- **Buscar** encuentra canciones.
+- **Buscar** encuentra canciones mientras escribes.
+- Toca tu foto, arriba a la derecha, para abrir **Perfil**: nombre, foto, cuenta, tema y actualizaciones.
+- En el reproductor, el botón de aleatorio cambia entre desactivado, aleatorio e inteligente (✦).
 - **Biblioteca** reúne playlists, Me gusta y descargas.
 - En **Biblioteca**, pega un enlace para importar o escribe un nombre para crear una playlist.
 - **Exportar** guarda tu biblioteca en un archivo CSV. No incluye el audio.
@@ -98,6 +113,13 @@ Para compilar necesitas Node.js 20+, Rust estable y las dependencias de Tauri. E
 ### Configurar Firebase
 
 Sigue [docs/firebase.md](docs/firebase.md). Después copia `.env.example` como `.env.local` y rellena los valores. Ese archivo no se sube a GitHub.
+
+Para la cuenta en Windows:
+
+1. En Google Cloud, dentro del mismo proyecto de Firebase, crea un ID de cliente OAuth de tipo **App de escritorio**.
+2. En Firebase → Authentication → Google, añade ese ID en **Lista de ID de cliente de proyectos externos**.
+3. Pon el ID y el secreto en `VITE_GOOGLE_DESKTOP_CLIENT_ID` y `VITE_GOOGLE_DESKTOP_CLIENT_SECRET`. En apps de escritorio Google no considera confidencial ese secreto.
+4. Publica las reglas nuevas con `npx firebase-tools@13.35.1 deploy --only firestore:rules`. Incluyen el perfil.
 
 Sin esta configuración la app funciona, pero no muestra la opción de cuenta. Así se compilan las versiones públicas.
 
@@ -157,15 +179,15 @@ En **GitHub → Settings → Secrets and variables → Actions** configura:
 Después crea un tag con la versión de `package.json`:
 
 ```bash
-git tag -a v0.4.0 -m "FoYu 0.4.0"
-git push origin v0.4.0
+git tag -a v0.5.0 -m "FoYu 0.5.0"
+git push origin v0.5.0
 ```
 
 El workflow crea un borrador con los instaladores de Windows y la APK de Android. Revísalo y publícalo desde GitHub.
 
 ### Activar la cuenta más adelante
 
-Las versiones públicas no llevan cuenta mientras no existan las variables `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID` y `VITE_GOOGLE_WEB_CLIENT_ID`. No las agregues todavía.
+Las versiones públicas no llevan cuenta mientras no existan las variables `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID` y `VITE_GOOGLE_WEB_CLIENT_ID`. No las agregues todavía. Para Windows se suman la variable `VITE_GOOGLE_DESKTOP_CLIENT_ID` y el secreto `VITE_GOOGLE_DESKTOP_CLIENT_SECRET`.
 
 Antes de activarla, agrega en Firebase las huellas de la clave de publicación, publica una política de privacidad basada en [docs/privacidad.md](docs/privacidad.md) y ponla en `VITE_PRIVACY_POLICY_URL`. Completa también la verificación de Google y revisa las condiciones de YouTube.
 

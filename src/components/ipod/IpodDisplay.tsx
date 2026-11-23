@@ -23,7 +23,11 @@ export type IpodView =
   | "likes"
   | "downloads"
   | "playlists"
-  | "playlist";
+  | "playlist"
+  | "settings"
+  | "remote"
+  | "category"
+  | "genres";
 
 export interface IpodDisplayProps {
   design: AppDesign;

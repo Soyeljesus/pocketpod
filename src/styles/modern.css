@@ -1569,3 +1569,64 @@
   .m-root { transition: none; }
   .m-player-art { transition: none; }
 }
+
+/* Búsqueda con sugerencias */
+.m-search-box { position: relative; z-index: 5; }
+.m-field .m-field-clear {
+  min-height: 34px;
+  width: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--m-muted);
+  background: transparent;
+}
+.m-suggest {
+  position: absolute;
+  inset: calc(100% + 6px) 0 auto;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--m-line);
+  border-radius: 16px;
+  background: var(--m-card-strong);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+.m-suggest button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.m-suggest button:hover,
+.m-suggest button:focus-visible { background: var(--m-surface); outline: none; }
+.m-suggest-song .m-track-art { width: 40px; height: 40px; flex: 0 0 auto; }
+.m-suggest-song .m-track-text { flex: 1; min-width: 0; }
+.m-suggest-song > .m-icon { color: var(--m-accent); }
+.m-suggest-query { color: var(--m-text); }
+.m-suggest-query .m-icon { color: var(--m-muted); width: 18px; height: 18px; }
+.m-refreshing { opacity: 0.6; transition: opacity 0.2s ease; }
+
+/* Reproducir secciones y aleatorio inteligente */
+.m-collection-actions { margin-top: 4px; }
+.m-smart-btn .m-icon,
+.m-player-extras button.smart .m-icon,
+.m-track.smart small .m-icon { color: var(--m-accent); }
+.m-player-extras button.active.smart .m-icon { color: var(--m-on-accent); }
+.m-track small .m-icon { width: 13px; height: 13px; vertical-align: -2px; margin-right: 3px; }
+.m-queue-title {
+  margin: 14px 4px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--m-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

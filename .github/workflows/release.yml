@@ -37,6 +37,14 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_FIREBASE_API_KEY: ${{ vars.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ vars.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ vars.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_APP_ID: ${{ vars.VITE_FIREBASE_APP_ID }}
+          VITE_GOOGLE_WEB_CLIENT_ID: ${{ vars.VITE_GOOGLE_WEB_CLIENT_ID }}
+          VITE_GOOGLE_DESKTOP_CLIENT_ID: ${{ vars.VITE_GOOGLE_DESKTOP_CLIENT_ID }}
+          VITE_GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.VITE_GOOGLE_DESKTOP_CLIENT_SECRET }}
+          VITE_PRIVACY_POLICY_URL: ${{ vars.VITE_PRIVACY_POLICY_URL }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "FoYu ${{ github.ref_name }}"

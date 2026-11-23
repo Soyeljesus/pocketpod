@@ -66,6 +66,10 @@ pub struct WidgetState {
     pub playing: bool,
     pub tint: String,
     pub accent: String,
+    #[serde(default)]
+    pub position_ms: u64,
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 #[cfg(not(target_os = "android"))]
@@ -81,32 +85,66 @@ pub fn widget_update(
     backend::update_widget(&handle, state)
 }
 
+/// En Windows abre Google en el navegador y devuelve solo el token de
+/// identidad, que Firebase usa para iniciar sesión.
 #[cfg(not(target_os = "android"))]
-const ANDROID_ONLY: &str = "Esta función está disponible por ahora en Android";
-
-#[cfg(not(target_os = "android"))]
-#[tauri::command(async)]
-pub fn google_sign_in(_client_id: String, _nonce: String) -> Result<String, String> {
-    Err(ANDROID_ONLY.to_string())
+#[tauri::command]
+pub async fn google_sign_in(
+    app: tauri::AppHandle,
+    client_id: String,
+    nonce: String,
+    client_secret: Option<String>,
+) -> Result<String, String> {
+    let tokens = crate::desktop_auth::authorize(
+        &app,
+        &client_id,
+        client_secret.as_deref().unwrap_or(""),
+        "openid email profile",
+        Some(&nonce),
+        None,
+    )
+    .await?;
+    tokens.id_token.ok_or_else(|| "google_invalid_credential".to_string())
 }
 
 #[cfg(not(target_os = "android"))]
 #[tauri::command(async)]
 pub fn google_clear_credential() {}
 
+/// El permiso de YouTube se pide aparte y el token se usa una vez: no llega
+/// al WebView ni se guarda.
 #[cfg(not(target_os = "android"))]
-#[tauri::command(async)]
-pub fn youtube_library_fetch(
-    _email: String,
-    _interactive: bool,
+#[tauri::command]
+pub async fn youtube_library_fetch(
+    app: tauri::AppHandle,
+    email: String,
+    interactive: bool,
+    client_id: Option<String>,
+    client_secret: Option<String>,
 ) -> Result<crate::music::youtube_account::YoutubeLibrary, String> {
-    Err(ANDROID_ONLY.to_string())
+    // Sin token guardado, actualizar en segundo plano pediría abrir el navegador.
+    if !interactive {
+        return Err("youtube_consent_required".to_string());
+    }
+    let tokens = crate::desktop_auth::authorize(
+        &app,
+        client_id.as_deref().unwrap_or(""),
+        client_secret.as_deref().unwrap_or(""),
+        "https://www.googleapis.com/auth/youtube.readonly",
+        None,
+        Some(&email),
+    )
+    .await
+    .map_err(|err| err.replace("google_", "youtube_"))?;
+    crate::music::youtube_account::fetch_library(&tokens.access_token).await
 }
 
+/// En Windows FoYu no guarda el permiso de YouTube, así que no hay nada que
+/// borrar del equipo. Se puede retirar del todo desde la cuenta de Google.
 #[cfg(not(target_os = "android"))]
 #[tauri::command(async)]
 pub fn youtube_disconnect(_email: String) -> Result<(), String> {
-    Err(ANDROID_ONLY.to_string())
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

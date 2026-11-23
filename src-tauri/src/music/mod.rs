@@ -10,6 +10,7 @@
 //! un motor Kotlin (InnerTubeX, el de Vivi-Music) o un binario yt-dlp sin
 //! tocar el frontend ni el contrato HTTP.
 
+pub mod discover;
 pub mod importers;
 pub mod innertube;
 pub mod library;
@@ -113,4 +114,31 @@ pub trait MusicEngine: Send + Sync {
     async fn resolve(&self, video_id: &str) -> Result<ResolvedStream, String>;
 
     async fn playlist(&self, playlist_id: &str) -> Result<ImportedPlaylist, String>;
+
+    /// Sugerencias mientras se escribe: búsquedas completas y canciones.
+    async fn suggestions(&self, _query: &str) -> Result<Suggestions, String> {
+        Ok(Suggestions::default())
+    }
+
+    /// Canciones parecidas a `video_id` (la "radio" de YouTube Music).
+    async fn radio(&self, _video_id: &str, _limit: usize) -> Result<Vec<Track>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Página de YouTube Music ya leída (inicio, ánimos y géneros, una categoría).
+    async fn browse_page(
+        &self,
+        _browse_id: &str,
+        _params: Option<&str>,
+        _region: &str,
+    ) -> Result<serde_json::Value, String> {
+        Err("No disponible".to_string())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Suggestions {
+    pub queries: Vec<String>,
+    pub tracks: Vec<Track>,
 }

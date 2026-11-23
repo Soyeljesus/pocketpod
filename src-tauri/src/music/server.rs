@@ -4,6 +4,8 @@
 //!   GET    /health
 //!   GET    /search?q=<texto>&limit=<1..30>&t=<token>
 //!   GET    /stream/<videoId>?t=<token>      (soporta Range)
+//!   GET    /suggest?q=<texto>&t=<token>     (sugerencias al escribir)
+//!   GET    /radio/<videoId>?limit=<n>&t=<token>  (canciones parecidas)
 //!   GET    /playlist?link=<enlace o id>&t=<token>
 //!   POST   /library/export?t=<token>        (devuelve CSV)
 //!   POST   /library/import?t=<token>        (nombre y contenido del archivo)
@@ -38,6 +40,7 @@ use super::library::{export_csv, import_file, ExportRequest, ImportRequest};
 use super::{BridgeInfo, MusicEngine, OfflineTrack, ResolvedStream, Track};
 
 const SEARCH_TTL: Duration = Duration::from_secs(10 * 60);
+const PAGE_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_SEARCH_CACHE: usize = 64;
 const MAX_STREAM_CACHE: usize = 128;
 const OFFLINE_INDEX: &str = "index.json";
@@ -144,9 +147,35 @@ struct AppState {
     streams: Arc<Mutex<HashMap<String, CachedStream>>>,
     offline: Option<Arc<OfflineStore>>,
     downloading: Arc<Mutex<HashSet<String>>>,
+    pages: Arc<Mutex<HashMap<String, (Instant, serde_json::Value)>>>,
 }
 
 impl AppState {
+    /// Lee una página de descubrimiento, guardada 30 minutos para no repetir peticiones.
+    async fn discover_page(
+        &self,
+        browse_id: &str,
+        params: Option<&str>,
+        region: &str,
+    ) -> Result<serde_json::Value, String> {
+        let key = format!("{browse_id}|{}|{region}", params.unwrap_or(""));
+        if let Ok(guard) = self.pages.lock() {
+            if let Some((at, value)) = guard.get(&key) {
+                if at.elapsed() < PAGE_TTL {
+                    return Ok(value.clone());
+                }
+            }
+        }
+        let value = self.engine.browse_page(browse_id, params, region).await?;
+        if let Ok(mut guard) = self.pages.lock() {
+            if guard.len() >= 48 {
+                guard.clear();
+            }
+            guard.insert(key, (Instant::now(), value.clone()));
+        }
+        Ok(value)
+    }
+
     fn authorized(&self, headers: &HeaderMap, token: Option<&str>) -> bool {
         if token.is_some_and(|candidate| candidate == self.token.as_str()) {
             return true;
@@ -307,6 +336,7 @@ fn prepare(
             streams: Arc::new(Mutex::new(HashMap::new())),
             offline,
             downloading: Arc::new(Mutex::new(HashSet::new())),
+            pages: Arc::new(Mutex::new(HashMap::new())),
         },
         info,
     ))
@@ -318,6 +348,10 @@ fn router(state: AppState) -> Router {
         .route("/search", get(search))
         .route("/stream/{video_id}", get(stream))
         .route("/playlist", get(playlist))
+        .route("/suggest", get(suggest))
+        .route("/radio/{video_id}", get(radio))
+        .route("/discover", get(discover))
+        .route("/moods", get(moods))
         .route(
             "/library/export",
             post(export_library).layer(DefaultBodyLimit::max(MAX_LIBRARY_BYTES)),
@@ -378,6 +412,114 @@ async fn search(
             state.store_search(key, tracks.clone());
             Json(tracks).into_response()
         }
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+async fn suggest(
+    State(state): State<AppState>,
+    Query(params): Query<SearchParams>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+    let query = params.q.unwrap_or_default().trim().to_string();
+    if query.is_empty() || query.chars().count() > 200 {
+        return Json(super::Suggestions::default()).into_response();
+    }
+    match state.engine.suggestions(&query).await {
+        Ok(found) => Json(found).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+async fn radio(
+    State(state): State<AppState>,
+    Path(video_id): Path<String>,
+    Query(params): Query<SearchParams>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+    let valid = (6..=20).contains(&video_id.len())
+        && video_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid {
+        return error(StatusCode::BAD_REQUEST, "Canción no válida");
+    }
+    let limit = params.limit.unwrap_or(25).clamp(1, 50);
+    match state.engine.radio(&video_id, limit).await {
+        Ok(tracks) => Json(tracks).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+#[derive(Deserialize)]
+struct DiscoverParams {
+    /// Página: vacío para el inicio o una categoría de ánimo/género.
+    id: Option<String>,
+    params: Option<String>,
+    gl: Option<String>,
+    t: Option<String>,
+}
+
+fn clean_region(gl: Option<&str>) -> String {
+    gl.filter(|code| code.len() == 2 && code.chars().all(|c| c.is_ascii_alphabetic()))
+        .map(str::to_ascii_uppercase)
+        .unwrap_or_else(|| "US".to_string())
+}
+
+fn clean_params(params: Option<&str>) -> Option<&str> {
+    params.filter(|value| {
+        !value.is_empty()
+            && value.len() <= 512
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '=' | '%'))
+    })
+}
+
+/// Inicio (sin `id`) o una categoría de ánimo o género (`id` + `params`).
+async fn discover(
+    State(state): State<AppState>,
+    Query(params): Query<DiscoverParams>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+    let region = clean_region(params.gl.as_deref());
+    let browse_id = params.id.as_deref().unwrap_or("FEmusic_home");
+    if !matches!(browse_id, "FEmusic_home" | "FEmusic_moods_and_genres_category") {
+        return error(StatusCode::BAD_REQUEST, "Página no válida");
+    }
+    let page_params = clean_params(params.params.as_deref());
+    if params.params.is_some() && page_params.is_none() {
+        return error(StatusCode::BAD_REQUEST, "Parámetros no válidos");
+    }
+    match state.discover_page(browse_id, page_params, &region).await {
+        Ok(value) => Json(super::discover::parse_page(&value)).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+async fn moods(
+    State(state): State<AppState>,
+    Query(params): Query<DiscoverParams>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+    let region = clean_region(params.gl.as_deref());
+    match state
+        .discover_page("FEmusic_moods_and_genres", None, &region)
+        .await
+    {
+        Ok(value) => Json(super::discover::parse_moods(&value)).into_response(),
         Err(err) => error(StatusCode::BAD_GATEWAY, err),
     }
 }

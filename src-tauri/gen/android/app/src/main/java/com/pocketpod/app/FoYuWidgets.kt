@@ -15,6 +15,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
+import android.os.SystemClock
 import android.view.View
 import android.widget.RemoteViews
 import java.io.ByteArrayOutputStream
@@ -28,6 +29,8 @@ object FoYuWidgets {
   const val ACTION_TOGGLE = "com.pocketpod.app.widget.TOGGLE"
   const val ACTION_NEXT = "com.pocketpod.app.widget.NEXT"
   const val ACTION_PREVIOUS = "com.pocketpod.app.widget.PREVIOUS"
+  const val ACTION_REWIND = "com.pocketpod.app.widget.REWIND"
+  const val ACTION_FORWARD = "com.pocketpod.app.widget.FORWARD"
 
   private const val PREFS = "foyu_widget"
   private const val ART_FILE = "widget_art.png"
@@ -44,6 +47,8 @@ object FoYuWidgets {
     playing: Boolean,
     tint: String,
     accent: String,
+    positionMs: Long,
+    durationMs: Long,
   ) {
     val app = context.applicationContext
     val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -53,6 +58,9 @@ object FoYuWidgets {
       .putString("artist", artist.take(160))
       .putString("art_url", artworkUrl)
       .putBoolean("playing", playing)
+      .putLong("position_ms", positionMs.coerceAtLeast(0))
+      .putLong("duration_ms", durationMs.coerceAtLeast(0))
+      .putLong("updated_at", SystemClock.elapsedRealtime())
       .putString("tint", if (COLOR.matches(tint)) tint else "#1d2f7b")
       .putString("accent", if (COLOR.matches(accent)) accent else "#b9c6ff")
       .apply()
@@ -64,8 +72,29 @@ object FoYuWidgets {
     refresh(app)
   }
 
+  /** Posición estimada ahora mismo, contando el tiempo desde la última actualización. */
+  fun positionNow(context: Context): Long {
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    val position = prefs.getLong("position_ms", 0)
+    val duration = prefs.getLong("duration_ms", 0)
+    if (!prefs.getBoolean("playing", false)) return position
+    val elapsed = SystemClock.elapsedRealtime() - prefs.getLong("updated_at", 0)
+    val estimate = position + elapsed.coerceAtLeast(0)
+    return if (duration > 0) estimate.coerceAtMost(duration) else estimate
+  }
+
+  fun formatTime(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    val hours = total / 3600
+    val minutes = (total % 3600) / 60
+    val seconds = total % 60
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
+    else "%d:%02d".format(minutes, seconds)
+  }
+
   fun refresh(context: Context) {
     val app = context.applicationContext
+    FoYuPlayback.refresh(app)
     val manager = AppWidgetManager.getInstance(app) ?: return
     render(app, manager, FoYuCompactWidget::class.java, R.layout.widget_compact)
     render(app, manager, FoYuLargeWidget::class.java, R.layout.widget_large)
@@ -140,12 +169,46 @@ object FoYuWidgets {
         R.id.widget_previous,
         if (active) action(context, ACTION_PREVIOUS, 3) else open,
       )
+      views.setOnClickPendingIntent(
+        R.id.widget_rewind,
+        if (active) action(context, ACTION_REWIND, 4) else open,
+      )
+      views.setOnClickPendingIntent(
+        R.id.widget_forward,
+        if (active) action(context, ACTION_FORWARD, 5) else open,
+      )
     }
     views.setViewVisibility(R.id.widget_next, View.VISIBLE)
+
+    // Tiempo: el cronómetro avanza solo, sin despertar a la app cada segundo.
+    val duration = prefs.getLong("duration_ms", 0)
+    val showTime = active && duration > 0
+    views.setViewVisibility(R.id.widget_time_row, if (showTime) View.VISIBLE else View.GONE)
+    views.setViewVisibility(R.id.widget_progress, if (showTime) View.VISIBLE else View.GONE)
+    if (showTime) {
+      val position = positionNow(context)
+      views.setChronometer(
+        R.id.widget_elapsed,
+        SystemClock.elapsedRealtime() - position,
+        null,
+        playing,
+      )
+      views.setTextViewText(
+        R.id.widget_duration,
+        if (layout == R.layout.widget_large) formatTime(duration)
+        else " / ${formatTime(duration)}",
+      )
+      views.setProgressBar(
+        R.id.widget_progress,
+        1000,
+        ((position * 1000) / duration).toInt().coerceIn(0, 1000),
+        false,
+      )
+    }
     return views
   }
 
-  private fun action(context: Context, name: String, code: Int): PendingIntent =
+  internal fun action(context: Context, name: String, code: Int): PendingIntent =
     PendingIntent.getBroadcast(
       context,
       code,
@@ -153,7 +216,7 @@ object FoYuWidgets {
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
-  private fun openApp(context: Context): PendingIntent =
+  internal fun openApp(context: Context): PendingIntent =
     PendingIntent.getActivity(
       context,
       0,
@@ -166,7 +229,10 @@ object FoYuWidgets {
 
   private fun artFile(context: Context) = File(context.cacheDir, ART_FILE)
 
-  private fun loadArt(context: Context): Bitmap? {
+  internal fun prefs(context: Context) =
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+  internal fun loadArt(context: Context): Bitmap? {
     val file = artFile(context)
     return if (file.exists()) BitmapFactory.decodeFile(file.path) else null
   }
@@ -260,6 +326,8 @@ class WidgetActionReceiver : BroadcastReceiver() {
       FoYuWidgets.ACTION_TOGGLE -> "toggle"
       FoYuWidgets.ACTION_NEXT -> "next"
       FoYuWidgets.ACTION_PREVIOUS -> "previous"
+      FoYuWidgets.ACTION_REWIND -> "rewind"
+      FoYuWidgets.ACTION_FORWARD -> "forward"
       else -> return
     }
     if (!MediaSessionPlugin.sendWidgetAction(action)) {

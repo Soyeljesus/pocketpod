@@ -3,16 +3,19 @@
   <ImageView android:id="@+id/widget_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:importantForAccessibility="no" android:scaleType="fitXY" android:src="@drawable/widget_surface"/>
   <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:gravity="center_vertical" android:orientation="horizontal" android:paddingStart="9dp" android:paddingEnd="9dp">
     <ImageView android:id="@+id/widget_art" android:layout_width="54dp" android:layout_height="54dp" android:background="@drawable/widget_art_empty" android:importantForAccessibility="no" android:scaleType="fitCenter" android:src="@drawable/ic_widget_note"/>
-    
-<LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="12dp" android:layout_marginEnd="8dp" android:orientation="vertical">
-  <TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:text="FoYu" android:textColor="#FFFFFFFF" android:textSize="15sp" android:textStyle="bold"/>
-  <TextView android:id="@+id/widget_artist" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:maxLines="1" android:text="@string/widget_idle" android:textColor="#D9FFFFFF" android:textSize="13sp"/>
-</LinearLayout>
-    
-<FrameLayout android:id="@+id/widget_play" android:layout_width="46dp" android:layout_height="46dp" android:contentDescription="@string/widget_play">
-  <ImageView android:id="@+id/widget_play_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:importantForAccessibility="no" android:scaleType="fitXY" android:src="@drawable/widget_pill"/>
-  <ImageView android:id="@+id/widget_play_icon" android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:importantForAccessibility="no" android:src="@drawable/ic_widget_play" android:tint="#FF11131B"/>
-</FrameLayout>
+    <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="12dp" android:layout_marginEnd="8dp" android:orientation="vertical">
+      <TextView android:id="@+id/widget_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:text="FoYu" android:textColor="#FFFFFFFF" android:textSize="15sp" android:textStyle="bold"/>
+      <TextView android:id="@+id/widget_artist" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="1dp" android:ellipsize="end" android:maxLines="1" android:text="@string/widget_idle" android:textColor="#D9FFFFFF" android:textSize="13sp"/>
+      <LinearLayout android:id="@+id/widget_time_row" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="1dp" android:orientation="horizontal" android:visibility="gone">
+        <Chronometer android:id="@+id/widget_elapsed" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#B3FFFFFF" android:textSize="11sp"/>
+        <TextView android:id="@+id/widget_duration" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#B3FFFFFF" android:textSize="11sp"/>
+      </LinearLayout>
+    </LinearLayout>
+    <FrameLayout android:id="@+id/widget_play" android:layout_width="46dp" android:layout_height="46dp" android:contentDescription="@string/widget_play">
+      <ImageView android:id="@+id/widget_play_bg" android:layout_width="match_parent" android:layout_height="match_parent" android:importantForAccessibility="no" android:scaleType="fitXY" android:src="@drawable/widget_pill"/>
+      <ImageView android:id="@+id/widget_play_icon" android:layout_width="24dp" android:layout_height="24dp" android:layout_gravity="center" android:importantForAccessibility="no" android:src="@drawable/ic_widget_play" android:tint="#FF11131B"/>
+    </FrameLayout>
     <ImageButton android:id="@+id/widget_next" android:layout_width="42dp" android:layout_height="42dp" android:layout_marginStart="6dp" android:background="@drawable/widget_round_button" android:contentDescription="@string/widget_next" android:scaleType="center" android:src="@drawable/ic_widget_next"/>
   </LinearLayout>
+  <ProgressBar android:id="@+id/widget_progress" style="?android:attr/progressBarStyleHorizontal" android:layout_width="match_parent" android:layout_height="3dp" android:layout_gravity="bottom" android:layout_marginStart="18dp" android:layout_marginEnd="18dp" android:layout_marginBottom="5dp" android:max="1000" android:progress="0" android:progressTint="#FFFFFFFF" android:progressBackgroundTint="#55FFFFFF" android:visibility="gone"/>
 </FrameLayout>

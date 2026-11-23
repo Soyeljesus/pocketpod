@@ -20,6 +20,9 @@ import { ClickWheel } from "./components/ipod/ClickWheel";
 import { UpdatePrompt } from "./components/ipod/UpdatePrompt";
 import { ModernApp } from "./components/modern/ModernApp";
 import { useUpdateCheck } from "./hooks/useUpdateCheck";
+import { useAppearance } from "./hooks/useAppearance";
+import { useProfile } from "./hooks/useProfile";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
   IS_ANDROID,
   leaveApp,
@@ -27,7 +30,8 @@ import {
   updateWidget,
 } from "./services/mediaBridge";
 import { exportLibraryCsv, importLibraryFile } from "./services/youtubeMusic";
-import type { AudioSource, YoutubeTrack } from "./types/youtube";
+import type { AudioSource, DiscoverTarget, YoutubeTrack } from "./types/youtube";
+import { useDiscover } from "./hooks/useDiscover";
 import "./styles/ipod.css";
 
 // Tamaño de diseño del iPod. La ventana puede encogerse hasta el mínimo
@@ -47,6 +51,7 @@ const EMPTY_LIBRARY: LibrarySnapshot = {
 interface NavEntry {
   view: IpodView;
   playlistId: string | null;
+  target?: DiscoverTarget | null;
 }
 
 function describeError(error: unknown): string {
@@ -62,6 +67,46 @@ async function readTextFile(file: File): Promise<string> {
         ? "utf-16be"
         : "utf-8";
   return new TextDecoder(encoding).decode(bytes);
+}
+
+const MODERN_SIZE_KEY = "foyu.window.modern";
+
+/** Guarda el tamaño de la ventana grande y vuelve a él al regresar. */
+async function resizeForDesign(design: AppDesign) {
+  const win = getCurrentWindow();
+  try {
+    if (design === "ipod") {
+      const size = (await win.innerSize()).toLogical(await win.scaleFactor());
+      try {
+        localStorage.setItem(
+          MODERN_SIZE_KEY,
+          JSON.stringify({ width: Math.round(size.width), height: Math.round(size.height) }),
+        );
+      } catch {
+        // Sin almacenamiento se usa el tamaño por defecto.
+      }
+      if (await win.isMaximized()) await win.unmaximize();
+      await win.setMinSize(new LogicalSize(280, 500));
+      await win.setSize(new LogicalSize(IPOD_BASE_WIDTH, IPOD_BASE_HEIGHT));
+    } else {
+      let width = 1200;
+      let height = 760;
+      try {
+        const saved = JSON.parse(localStorage.getItem(MODERN_SIZE_KEY) ?? "null");
+        if (saved?.width >= 360 && saved?.height >= 560) {
+          width = saved.width;
+          height = saved.height;
+        }
+      } catch {
+        // Tamaño por defecto.
+      }
+      await win.setMinSize(new LogicalSize(360, 560));
+      await win.setSize(new LogicalSize(width, height));
+    }
+    await win.center();
+  } catch {
+    // Si la ventana no se puede cambiar, el contenido se adapta igualmente.
+  }
 }
 
 function computeScale(): number {
@@ -99,6 +144,7 @@ function App() {
   const [view, setView] = useState<IpodView>("menu");
   const [browseView, setBrowseView] = useState<IpodView>("menu");
   const [playlistId, setPlaylistId] = useState<string | null>(null);
+  const [discoverTarget, setDiscoverTarget] = useState<DiscoverTarget | null>(null);
   const [trackToAdd, setTrackToAdd] = useState<YoutubeTrack | null>(null);
   const [optionsTrack, setOptionsTrack] = useState<YoutubeTrack | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -136,8 +182,22 @@ function App() {
       youtube.addLikes(library.likes);
     },
   });
-  const { update, dismiss: dismissUpdate, install: installUpdate } =
-    useUpdateCheck();
+  const updates = useUpdateCheck();
+  const appearance = useAppearance();
+  const profile = useProfile(cloud.user);
+  const desktopModern = !IS_ANDROID && design === "modern";
+  const discover = useDiscover(youtube.likes, youtube.played, design === "modern");
+
+  // En PC el diseño moderno ocupa una ventana normal y el iPod una pequeña.
+  const firstDesign = useRef(true);
+  useEffect(() => {
+    if (IS_ANDROID) return;
+    if (firstDesign.current) {
+      firstDesign.current = false;
+      return;
+    }
+    void resizeForDesign(design);
+  }, [design]);
 
   // Toda la música convive: se muestra lo que esté sonando, sin elegir fuente.
   const youtubePlaying = youtube.state.status === "playing";
@@ -170,8 +230,31 @@ function App() {
   const palette = useArtworkPalette(state.artworkDataUrl);
   const widgetPlaying = state.status === "playing";
 
+  // Widgets y reproductor de notificaciones. Android calcula el avance del
+  // tiempo; aquí solo se avisa al cambiar de canción, al pausar, al saltar a
+  // otro punto o cada 15 s para corregir pequeñas diferencias.
+  const widgetSent = useRef<{ key: string; position: number; at: number } | null>(
+    null,
+  );
   useEffect(() => {
     if (!IS_ANDROID) return;
+    const key = [
+      state.title,
+      state.artist,
+      state.artworkDataUrl,
+      widgetPlaying,
+      palette.tint,
+      palette.accent,
+      Math.round(state.durationSec),
+    ].join("|");
+    const now = Date.now();
+    const last = widgetSent.current;
+    if (last && last.key === key) {
+      const expected =
+        last.position + (widgetPlaying ? (now - last.at) / 1000 : 0);
+      if (Math.abs(positionSec - expected) < 2 && now - last.at < 15_000) return;
+    }
+    widgetSent.current = { key, position: positionSec, at: now };
     void updateWidget({
       title: state.title,
       artist: state.artist,
@@ -179,12 +262,16 @@ function App() {
       playing: widgetPlaying,
       tint: palette.tint,
       accent: palette.accent,
+      positionMs: Math.max(0, Math.round(positionSec * 1000)),
+      durationMs: Math.max(0, Math.round(state.durationSec * 1000)),
     }).catch(() => {});
   }, [
     state.title,
     state.artist,
     state.artworkDataUrl,
+    state.durationSec,
     widgetPlaying,
+    positionSec,
     palette.tint,
     palette.accent,
   ]);
@@ -192,19 +279,24 @@ function App() {
   const selectedPlaylist =
     playlistStore.playlists.find((item) => item.id === playlistId) ?? null;
 
-  const showEntry = ({ view: next, playlistId: nextPlaylist }: NavEntry) => {
+  const showEntry = ({ view: next, playlistId: nextPlaylist, target: nextTarget }: NavEntry) => {
     setView(next);
     setPlaylistId(nextPlaylist);
+    if (nextTarget !== undefined) setDiscoverTarget(nextTarget);
     if (next !== "nowPlaying") setBrowseView(next);
   };
 
-  const goTo = (next: IpodView, nextPlaylist = playlistId) => {
-    if (next === view && nextPlaylist === playlistId) return;
+  const goTo = (
+    next: IpodView,
+    nextPlaylist = playlistId,
+    nextTarget: DiscoverTarget | null = discoverTarget,
+  ) => {
+    if (next === view && nextPlaylist === playlistId && nextTarget === discoverTarget) return;
     navStack.current = [
       ...navStack.current.slice(-49),
-      { view, playlistId },
+      { view, playlistId, target: discoverTarget },
     ];
-    showEntry({ view: next, playlistId: nextPlaylist });
+    showEntry({ view: next, playlistId: nextPlaylist, target: nextTarget });
   };
 
   const goBack = () => {
@@ -261,6 +353,7 @@ function App() {
   }, []);
 
   const toggleDesign = () => {
+    if (view === "settings") showEntry({ view: "menu", playlistId: null });
     setDesign((current) => (current === "modern" ? "ipod" : "modern"));
   };
 
@@ -298,9 +391,17 @@ function App() {
     else void system.seek(seconds);
   };
 
-  const widgetActions = useRef({ playPause, skipNext, skipPrevious });
+  const widgetActions = useRef({ playPause, skipNext, skipPrevious, seek });
   useEffect(() => {
-    widgetActions.current = { playPause, skipNext, skipPrevious };
+    widgetActions.current = { playPause, skipNext, skipPrevious, seek };
+  });
+  const widgetPlayingRef = useRef(widgetPlaying);
+  const positionRef = useRef(positionSec);
+  const durationRef = useRef(state.durationSec);
+  useEffect(() => {
+    widgetPlayingRef.current = widgetPlaying;
+    positionRef.current = positionSec;
+    durationRef.current = state.durationSec;
   });
 
   useEffect(() => {
@@ -309,9 +410,21 @@ function App() {
       __foyuWidget?: (action: string) => void;
     };
     host.__foyuWidget = (action) => {
-      if (action === "toggle") widgetActions.current.playPause();
-      if (action === "next") widgetActions.current.skipNext();
-      if (action === "previous") widgetActions.current.skipPrevious();
+      const actions = widgetActions.current;
+      const playing = widgetPlayingRef.current;
+      const position = positionRef.current;
+      const duration = durationRef.current;
+      if (action === "toggle") actions.playPause();
+      if (action === "play" && !playing) actions.playPause();
+      if (action === "pause" && playing) actions.playPause();
+      if (action === "next") actions.skipNext();
+      if (action === "previous") actions.skipPrevious();
+      if (action === "rewind") actions.seek(Math.max(0, position - 10));
+      if (action === "forward") {
+        actions.seek(duration > 0 ? Math.min(duration - 1, position + 10) : position + 10);
+      }
+      const seekTo = /^seek:(\d{1,6})$/.exec(action);
+      if (seekTo) actions.seek(Number(seekTo[1]));
     };
     return () => {
       delete host.__foyuWidget;
@@ -479,10 +592,14 @@ function App() {
   };
 
   return (
-    <div className={`app-root${IS_ANDROID ? " platform-android" : ""}`}>
+    <div
+      className={`app-root${IS_ANDROID ? " platform-android" : ""}${
+        desktopModern ? " desktop-modern" : ""
+      }`}
+    >
       <div
         className="ipod-stage"
-        style={{ "--ipod-scale": scale } as CSSProperties}
+        style={{ "--ipod-scale": desktopModern ? 1 : scale } as CSSProperties}
       >
         {design === "modern" ? (
           <ModernApp
@@ -497,10 +614,43 @@ function App() {
             onNext={skipNext}
             onPrevious={skipPrevious}
             palette={palette}
-            shuffle={youtube.shuffle}
+            shuffleMode={youtube.shuffleMode}
+            smartLoading={youtube.smartLoading}
             repeat={youtube.repeat}
-            onToggleShuffle={youtube.toggleShuffle}
+            upNext={youtube.upNext}
+            suggestions={youtube.suggestions}
+            onCycleShuffle={youtube.cycleShuffle}
             onToggleRepeat={youtube.toggleRepeat}
+            onPlayCollection={(tracks, mode) => {
+              if (systemPlaying) void system.playPause();
+              youtube.playCollection(tracks, mode);
+            }}
+            onAddToQueue={youtube.addToQueue}
+            onPlayNext={youtube.playNext}
+            onRemoveFromQueue={youtube.removeFromQueue}
+            onJumpTo={youtube.jumpTo}
+            onSearchText={(text) => void youtube.search(text)}
+            settings={{
+              profile,
+              cloud,
+              theme: appearance.preference,
+              onThemeChange: appearance.setPreference,
+              updates,
+            }}
+            theme={appearance.theme}
+            onOpenSettings={() => goTo("settings")}
+            volume={youtube.volume}
+            onVolumeChange={youtube.setVolume}
+            discover={discover}
+            discoverTarget={discoverTarget}
+            ytPlayed={youtube.played}
+            onOpenTarget={(target) =>
+              goTo(target.kind === "remote" ? "remote" : "category", playlistId, target)
+            }
+            onOpenGenres={() => goTo("genres")}
+            onSaveRemote={(playlist, title) => {
+              playlistStore.saveImported(playlist, title);
+            }}
           />
         ) : (
           <IpodShell theme="classic-white">
@@ -536,11 +686,11 @@ function App() {
             onClose={() => setTrackToAdd(null)}
           />
         )}
-        {update && (
+        {updates.prompt && design === "ipod" && (
           <UpdatePrompt
-            version={update.version}
-            onInstall={installUpdate}
-            onDismiss={dismissUpdate}
+            version={updates.prompt.version}
+            onInstall={updates.install}
+            onDismiss={updates.dismiss}
           />
         )}
       </div>

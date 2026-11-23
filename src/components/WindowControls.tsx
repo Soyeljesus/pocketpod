@@ -14,6 +14,15 @@ export function WindowControls() {
       </button>
       <button
         type="button"
+        className="window-btn window-maximize"
+        aria-label="Maximizar"
+        title="Maximizar"
+        onClick={() => void getCurrentWindow().toggleMaximize().catch(() => {})}
+      >
+        ▢
+      </button>
+      <button
+        type="button"
         className="window-btn window-close"
         aria-label="Cerrar"
         title="Cerrar"

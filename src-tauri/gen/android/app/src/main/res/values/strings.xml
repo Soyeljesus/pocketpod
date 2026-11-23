@@ -10,4 +10,8 @@
     <string name="widget_pause">"Pausar"</string>
     <string name="widget_next">"Siguiente"</string>
     <string name="widget_previous">"Anterior"</string>
+    <string name="widget_rewind">"Retroceder 10 segundos"</string>
+    <string name="widget_forward">"Adelantar 10 segundos"</string>
+    <string name="playback_channel">"Reproducción"</string>
+    <string name="playback_channel_description">"Controles de la canción que suena"</string>
 </resources>

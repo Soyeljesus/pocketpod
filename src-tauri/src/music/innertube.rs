@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use reqwest::header::{ACCEPT_LANGUAGE, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT};
 use serde_json::{json, Value};
 
-use super::{ImportedPlaylist, MusicEngine, ResolvedStream, Track};
+use super::{ImportedPlaylist, MusicEngine, ResolvedStream, Suggestions, Track};
 
 const YOUTUBE: &str = "https://www.youtube.com";
 const YOUTUBE_MUSIC: &str = "https://music.youtube.com";
@@ -127,9 +127,13 @@ impl InnerTube {
     }
 
     async fn browse(&self, body: Value) -> Result<Value, String> {
+        self.post_music("browse", body).await
+    }
+
+    async fn post_music(&self, endpoint: &str, body: Value) -> Result<Value, String> {
         let response = self
             .http
-            .post(format!("{YOUTUBE_MUSIC}/youtubei/v1/browse?prettyPrint=false"))
+            .post(format!("{YOUTUBE_MUSIC}/youtubei/v1/{endpoint}?prettyPrint=false"))
             .header(CONTENT_TYPE, "application/json")
             .header(ORIGIN, YOUTUBE_MUSIC)
             .header(REFERER, format!("{YOUTUBE_MUSIC}/"))
@@ -243,6 +247,46 @@ impl MusicEngine for InnerTube {
             skipped: 0,
             tracks,
         })
+    }
+
+    async fn suggestions(&self, query: &str) -> Result<Suggestions, String> {
+        let value = self
+            .post_music(
+                "music/get_search_suggestions",
+                json!({ "context": { "client": self.music_client() }, "input": query }),
+            )
+            .await?;
+        Ok(parse_suggestions(&value))
+    }
+
+    async fn browse_page(
+        &self,
+        browse_id: &str,
+        params: Option<&str>,
+        region: &str,
+    ) -> Result<Value, String> {
+        let mut client = self.music_client();
+        client["gl"] = json!(region);
+        let mut body = json!({ "context": { "client": client }, "browseId": browse_id });
+        if let Some(params) = params.filter(|value| !value.is_empty()) {
+            body["params"] = json!(params);
+        }
+        self.browse(body).await
+    }
+
+    async fn radio(&self, video_id: &str, limit: usize) -> Result<Vec<Track>, String> {
+        let value = self
+            .post_music(
+                "next",
+                json!({
+                    "context": { "client": self.music_client() },
+                    "videoId": video_id,
+                    "playlistId": format!("RDAMVM{video_id}"),
+                    "isAudioOnly": true,
+                }),
+            )
+            .await?;
+        Ok(parse_radio(&value, video_id, limit))
     }
 
     async fn resolve(&self, video_id: &str) -> Result<ResolvedStream, String> {
@@ -672,7 +716,7 @@ fn parse_search(value: &Value, limit: usize) -> Vec<Track> {
         .collect()
 }
 
-fn parse_tracks(
+pub(super) fn parse_tracks(
     value: &Value,
     limit: usize,
     seen: &mut std::collections::HashSet<String>,
@@ -939,6 +983,156 @@ fn parse_duration(text: &str) -> Option<f64> {
     Some(seconds as f64)
 }
 
+fn parse_suggestions(value: &Value) -> Suggestions {
+    let mut queries = Vec::new();
+    collect_suggestions(value, &mut queries);
+    queries.dedup();
+    queries.truncate(6);
+
+    let mut seen = std::collections::HashSet::new();
+    let tracks = parse_tracks(value, 4, &mut seen);
+    Suggestions { queries, tracks }
+}
+
+fn collect_suggestions(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(item) = map.get("searchSuggestionRenderer") {
+                let query = item
+                    .pointer("/navigationEndpoint/searchEndpoint/query")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        let runs = item.pointer("/suggestion/runs")?.as_array()?;
+                        Some(
+                            runs.iter()
+                                .filter_map(|run| run.get("text").and_then(Value::as_str))
+                                .collect::<String>(),
+                        )
+                    });
+                if let Some(query) = query.map(|text| text.trim().to_string()) {
+                    if !query.is_empty() {
+                        out.push(query);
+                    }
+                }
+                return;
+            }
+            for child in map.values() {
+                collect_suggestions(child, out);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_suggestions(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_panel_items<'a>(value: &'a Value, out: &mut Vec<&'a Value>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(item) = map.get("playlistPanelVideoRenderer") {
+                out.push(item);
+                return;
+            }
+            for child in map.values() {
+                collect_panel_items(child, out);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_panel_items(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Lee la cola de "radio" de `/next`. Se salta la canción de partida.
+fn parse_radio(value: &Value, seed: &str, limit: usize) -> Vec<Track> {
+    let mut items = Vec::new();
+    collect_panel_items(value, &mut items);
+
+    let mut seen = std::collections::HashSet::from([seed.to_string()]);
+    let mut tracks = Vec::new();
+    for item in items {
+        let Some(video_id) = item.get("videoId").and_then(Value::as_str) else {
+            continue;
+        };
+        if video_id.is_empty() || !seen.insert(video_id.to_string()) {
+            continue;
+        }
+        let text_of = |pointer: &str| {
+            item.pointer(pointer)
+                .and_then(Value::as_array)
+                .map(|runs| {
+                    runs.iter()
+                        .filter_map(|run| run.get("text").and_then(Value::as_str))
+                        .collect::<String>()
+                })
+                .unwrap_or_default()
+        };
+        let title = text_of("/title/runs").trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+
+        let runs: Vec<&Value> = item
+            .pointer("/longBylineText/runs")
+            .and_then(Value::as_array)
+            .map(|runs| runs.iter().collect())
+            .unwrap_or_default();
+        let parts: Vec<String> = text_of("/longBylineText/runs")
+            .split(" • ")
+            .map(str::trim)
+            .filter(|part| !part.is_empty() && !is_noise(part))
+            .map(str::to_string)
+            .collect();
+        let artist = parts.first().cloned().unwrap_or_default();
+        let album = runs
+            .iter()
+            .find_map(|run| run_text(run, "MUSIC_PAGE_TYPE_ALBUM"))
+            .map(str::to_string)
+            .or_else(|| parts.get(1).cloned())
+            .unwrap_or_default();
+        if is_spoken_content(&title, &artist, &album) {
+            continue;
+        }
+
+        let duration_sec = item
+            .pointer("/lengthText/runs/0/text")
+            .and_then(Value::as_str)
+            .and_then(parse_duration)
+            .unwrap_or(0.0);
+        if duration_sec > MAX_SEARCH_SONG_SECONDS {
+            continue;
+        }
+        let thumbnail_url = item
+            .pointer("/thumbnail/thumbnails")
+            .and_then(Value::as_array)
+            .and_then(|list| list.last())
+            .and_then(|thumb| thumb.get("url"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| Some(format!("https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")));
+
+        tracks.push(Track {
+            video_id: video_id.to_string(),
+            title,
+            artist,
+            album,
+            duration_sec,
+            thumbnail_url,
+        });
+        if tracks.len() >= limit {
+            break;
+        }
+    }
+    tracks
+}
+
 fn thumbnail_of(item: &Value) -> Option<String> {
     item.pointer(
         "/thumbnail/musicThumbnailRenderer/thumbnail/thumbnails",
@@ -1063,6 +1257,51 @@ mod tests {
         }]});
         assert_eq!(find_continuation(&legacy).as_deref(), Some("next-b"));
         assert_eq!(find_continuation(&json!({ "contents": [] })), None);
+    }
+
+    #[test]
+    fn reads_search_suggestions_and_songs() {
+        let value = json!({ "contents": [
+            { "searchSuggestionsSectionRenderer": { "contents": [
+                { "searchSuggestionRenderer": {
+                    "suggestion": { "runs": [{ "text": "bad bun" }, { "text": "ny" }] },
+                    "navigationEndpoint": { "searchEndpoint": { "query": "bad bunny" } }
+                }},
+                { "searchSuggestionRenderer": {
+                    "suggestion": { "runs": [{ "text": "bad bunny dtmf" }] }
+                }}
+            ]}},
+            { "searchSuggestionsSectionRenderer": { "contents": [
+                list_item("abc", "EoO", "MUSIC_VIDEO_TYPE_ATV")
+            ]}}
+        ]});
+        let parsed = parse_suggestions(&value);
+        assert_eq!(parsed.queries, vec!["bad bunny", "bad bunny dtmf"]);
+        assert_eq!(parsed.tracks.len(), 1);
+        assert_eq!(parsed.tracks[0].video_id, "abc");
+    }
+
+    #[test]
+    fn reads_radio_without_seed_or_noise() {
+        let item = |id: &str, title: &str, byline: &str| {
+            json!({ "playlistPanelVideoRenderer": {
+                "videoId": id,
+                "title": { "runs": [{ "text": title }] },
+                "longBylineText": { "runs": [{ "text": byline }] },
+                "lengthText": { "runs": [{ "text": "3:44" }] }
+            }})
+        };
+        let value = json!({ "contents": [
+            item("seed", "Tití me preguntó", "Bad Bunny • 1133 M de visualizaciones"),
+            item("b", "NUEVAYoL", "Bad Bunny • 174 M de visualizaciones • 1,2 M Me gusta"),
+            item("b", "NUEVAYoL", "Bad Bunny"),
+            item("c", "Capítulo 1", "Autor • Audiolibro"),
+        ]});
+        let tracks = parse_radio(&value, "seed", 10);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].video_id, "b");
+        assert_eq!(tracks[0].artist, "Bad Bunny");
+        assert_eq!(tracks[0].duration_sec, 224.0);
     }
 
     #[test]

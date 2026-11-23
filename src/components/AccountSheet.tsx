@@ -22,10 +22,6 @@ function syncLabel(cloud: UseCloudSyncResult) {
 }
 
 export function AccountSheet({ cloud, onClose }: AccountSheetProps) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const busy = cloud.status === "working";
-  const policyUrl = privacyPolicyUrl;
-
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <section
@@ -44,7 +40,19 @@ export function AccountSheet({ cloud, onClose }: AccountSheetProps) {
             Cerrar
           </button>
         </header>
+        <AccountPanel cloud={cloud} />
+      </section>
+    </div>
+  );
+}
 
+/** Opciones de la cuenta: se usa en la hoja del iPod y en Perfil. */
+export function AccountPanel({ cloud }: { cloud: UseCloudSyncResult }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const busy = cloud.status === "working";
+  const policyUrl = privacyPolicyUrl;
+
+  return (
         <div className="account-body">
           {cloud.message && <p className="account-message">{cloud.message}</p>}
 
@@ -123,7 +131,7 @@ export function AccountSheet({ cloud, onClose }: AccountSheetProps) {
                   disabled={busy}
                   onClick={() => void cloud.signOut(true)}
                 >
-                  Cerrar sesión y quitar la biblioteca de este teléfono
+                  Cerrar sesión y quitar la biblioteca de este dispositivo
                 </button>
               </section>
 
@@ -166,7 +174,5 @@ export function AccountSheet({ cloud, onClose }: AccountSheetProps) {
             </button>
           )}
         </div>
-      </section>
-    </div>
   );
 }

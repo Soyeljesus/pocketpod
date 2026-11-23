@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  DiscoverChip,
+  DiscoverItem,
+  DiscoverPage,
+  DiscoverShelf,
+  MoodGroup,
+  MoodItem,
   ImportedCollection,
   ImportedPlaylist,
   LibraryImportResult,
@@ -73,6 +79,127 @@ export async function searchYoutubeMusic(
   const data = await response.json();
   if (!Array.isArray(data)) return [];
   return data.map(normalizeTrack).filter((track) => track.videoId !== "");
+}
+
+export interface SearchSuggestions {
+  queries: string[];
+  tracks: YoutubeTrack[];
+}
+
+/** Sugerencias mientras se escribe: búsquedas y canciones que encajan. */
+export async function suggestYoutubeMusic(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SearchSuggestions> {
+  const info = await getBridgeInfo();
+  if (!info.available) return { queries: [], tracks: [] };
+  const params = new URLSearchParams({ q: query });
+  const response = await fetch(
+    `${info.baseUrl}/suggest?${params.toString()}&${authQuery(info)}`,
+    { headers: { Accept: "application/json" }, signal },
+  );
+  if (!response.ok) return { queries: [], tracks: [] };
+  const data = await response.json().catch(() => null);
+  return {
+    queries: (Array.isArray(data?.queries) ? data.queries : [])
+      .map((item: unknown) => String(item))
+      .filter(Boolean),
+    tracks: (Array.isArray(data?.tracks) ? data.tracks : [])
+      .map(normalizeTrack)
+      .filter((track: YoutubeTrack) => track.videoId !== ""),
+  };
+}
+
+/** Canciones parecidas a una dada, según YouTube Music. */
+export async function fetchRadio(
+  videoId: string,
+  limit = 25,
+): Promise<YoutubeTrack[]> {
+  const info = await getBridgeInfo();
+  if (!info.available) return [];
+  const response = await fetch(
+    `${info.baseUrl}/radio/${encodeURIComponent(videoId)}?limit=${limit}&${authQuery(info)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  if (!response.ok) return [];
+  const data = await response.json().catch(() => null);
+  if (!Array.isArray(data)) return [];
+  return data.map(normalizeTrack).filter((track) => track.videoId !== "");
+}
+
+/** País para las listas de YouTube Music, tomado del idioma del dispositivo. */
+function region(): string {
+  const tag = navigator.language || "es-MX";
+  const match = /[-_]([A-Za-z]{2})\b/.exec(tag);
+  return (match?.[1] ?? "MX").toUpperCase();
+}
+
+function normalizeItem(raw: any): DiscoverItem | null {
+  const kind = raw?.kind;
+  if (kind !== "playlist" && kind !== "album" && kind !== "song") return null;
+  const id = String(raw?.id ?? "");
+  if (!id) return null;
+  return {
+    kind,
+    id,
+    title: String(raw?.title ?? ""),
+    subtitle: String(raw?.subtitle ?? ""),
+    thumbnailUrl: raw?.thumbnailUrl ?? null,
+    track: raw?.track ? normalizeTrack(raw.track) : null,
+  };
+}
+
+async function bridgeJson(path: string, query: Record<string, string>) {
+  const info = await getBridgeInfo();
+  if (!info.available) throw new Error(info.message ?? "La música no está disponible");
+  const params = new URLSearchParams({ ...query, gl: region() });
+  const response = await fetch(
+    `${info.baseUrl}${path}?${params.toString()}&${authQuery(info)}`,
+    { headers: { Accept: "application/json" } },
+  );
+  const data = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(data?.error ?? `El puente respondió ${response.status}`);
+  return data;
+}
+
+/** Inicio de YouTube Music, o una categoría de ánimo o género. */
+export async function fetchDiscover(
+  target?: { browseId?: string; params?: string },
+): Promise<DiscoverPage> {
+  const query: Record<string, string> = {};
+  if (target?.browseId) query.id = target.browseId;
+  if (target?.params) query.params = target.params;
+  const data = await bridgeJson("/discover", query);
+  return {
+    chips: (Array.isArray(data?.chips) ? data.chips : [])
+      .map((chip: any) => ({ title: String(chip?.title ?? ""), params: String(chip?.params ?? "") }))
+      .filter((chip: DiscoverChip) => chip.title && chip.params),
+    shelves: (Array.isArray(data?.shelves) ? data.shelves : [])
+      .map((shelf: any) => ({
+        title: String(shelf?.title ?? ""),
+        items: (Array.isArray(shelf?.items) ? shelf.items : [])
+          .map(normalizeItem)
+          .filter(Boolean) as DiscoverItem[],
+      }))
+      .filter((shelf: DiscoverShelf) => shelf.title && shelf.items.length > 0),
+  };
+}
+
+export async function fetchMoods(): Promise<MoodGroup[]> {
+  const data = await bridgeJson("/moods", {});
+  return (Array.isArray(data) ? data : [])
+    .map((group: any) => ({
+      title: String(group?.title ?? ""),
+      items: (Array.isArray(group?.items) ? group.items : [])
+        .map((item: any) => ({
+          title: String(item?.title ?? ""),
+          browseId: String(item?.browseId ?? ""),
+          params: String(item?.params ?? ""),
+          color: typeof item?.color === "string" ? item.color : null,
+        }))
+        .filter((item: MoodItem) => item.title && item.browseId && item.params),
+    }))
+    .filter((group: MoodGroup) => group.title && group.items.length > 0);
 }
 
 /** Lee una playlist pública de YouTube Music, Spotify, Apple Music, Deezer u otra web. */

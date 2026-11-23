@@ -66,13 +66,6 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
 
   const version = tag.replace(/^v/i, "");
 
-  // Si el usuario ya dijo "ahora no" para esta versión, no volver a insistir.
-  try {
-    if (localStorage.getItem(DISMISSED_KEY) === version) return null;
-  } catch {
-    // localStorage no disponible: se muestra el aviso igualmente.
-  }
-
   const assets: Array<{ name?: string; browser_download_url?: string }> =
     Array.isArray(data.assets) ? data.assets : [];
 
@@ -89,6 +82,15 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
     downloadUrl: asset?.browser_download_url ?? releaseUrl,
     releaseUrl,
   };
+}
+
+/** True si la persona ya dijo "ahora no" a esta versión. */
+export function wasDismissed(version: string): boolean {
+  try {
+    return localStorage.getItem(DISMISSED_KEY) === version;
+  } catch {
+    return false;
+  }
 }
 
 /** Recuerda que el usuario rechazó esta versión. */

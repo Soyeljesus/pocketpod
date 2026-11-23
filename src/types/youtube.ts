@@ -11,6 +11,59 @@ export interface YoutubeTrack {
   thumbnailUrl: string | null;
 }
 
+/** Aleatorio normal o inteligente (mezcla recomendaciones parecidas). */
+export type ShuffleMode = "off" | "on" | "smart";
+
+/** Próxima canción: añadida a mano, de la lista que suena o recomendada. */
+export interface QueueItem {
+  track: YoutubeTrack;
+  kind: "manual" | "context" | "smart";
+  /** Posición dentro de su grupo, para saltar directamente a ella. */
+  index: number;
+}
+
+/** Tarjeta de descubrimiento: playlist, álbum o canción de YouTube Music. */
+export interface DiscoverItem {
+  kind: "playlist" | "album" | "song";
+  id: string;
+  title: string;
+  subtitle: string;
+  thumbnailUrl: string | null;
+  track: YoutubeTrack | null;
+}
+
+export interface DiscoverShelf {
+  title: string;
+  items: DiscoverItem[];
+}
+
+export interface DiscoverChip {
+  title: string;
+  params: string;
+}
+
+export interface DiscoverPage {
+  chips: DiscoverChip[];
+  shelves: DiscoverShelf[];
+}
+
+export interface MoodItem {
+  title: string;
+  browseId: string;
+  params: string;
+  color: string | null;
+}
+
+export interface MoodGroup {
+  title: string;
+  items: MoodItem[];
+}
+
+/** Lo que se abre desde Inicio: una playlist pública o una categoría. */
+export type DiscoverTarget =
+  | { kind: "remote"; id: string; title: string; subtitle: string; thumbnailUrl: string | null }
+  | { kind: "category"; browseId: string; params: string; title: string; color: string | null };
+
 /** Canción descargada para escuchar sin conexión. */
 export interface OfflineTrack extends YoutubeTrack {
   fileName: string;

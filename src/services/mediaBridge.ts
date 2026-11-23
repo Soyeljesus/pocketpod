@@ -65,6 +65,8 @@ export interface WidgetState {
   playing: boolean;
   tint: string;
   accent: string;
+  positionMs: number;
+  durationMs: number;
 }
 
 /** Actualiza los widgets de la pantalla de inicio de Android. */

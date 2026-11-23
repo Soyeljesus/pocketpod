@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { DesignToggle } from "../DesignToggle";
 import { ResizeGrip, WindowControls } from "../WindowControls";
 import type { IpodDisplayProps, IpodView } from "../ipod/IpodDisplay";
@@ -7,21 +7,38 @@ import { TrackProgress } from "../ipod/TrackProgress";
 import type { ArtworkPalette } from "../../hooks/useArtworkAccent";
 import { looksLikeLink } from "../../hooks/usePlaylists";
 import { IS_ANDROID } from "../../services/mediaBridge";
-import type { SavedPlaylist, YoutubeTrack } from "../../types/youtube";
+import type { SearchSuggestions } from "../../services/youtubeMusic";
+import type {
+  DiscoverItem,
+  DiscoverPage,
+  DiscoverShelf,
+  DiscoverTarget,
+  ImportedPlaylist,
+  MoodGroup,
+  QueueItem,
+  SavedPlaylist,
+  ShuffleMode,
+  YoutubeTrack,
+} from "../../types/youtube";
+import type { UseDiscoverResult } from "../../hooks/useDiscover";
+import { fetchDiscover, fetchPlaylist } from "../../services/youtubeMusic";
 import {
-  countLabel,
   formatDuration,
   formatSize,
   formatTotalDuration,
 } from "../../utils/format";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
+import { ProfileButtons, ProfilePanel } from "./ProfilePanel";
+import type { ProfileSection, ProfileSettings } from "./ProfilePanel";
+import type { ResolvedTheme } from "../../hooks/useAppearance";
 import "@fontsource/inter/latin-400.css";
 import "@fontsource/inter/latin-500.css";
 import "@fontsource/inter/latin-600.css";
 import "@fontsource/outfit/latin-600.css";
 import "@fontsource/outfit/latin-700.css";
 import "../../styles/modern.css";
+import "../../styles/foyu-layout.css";
 
 const PAGE_SIZE = 100;
 
@@ -36,10 +53,80 @@ export interface ModernAppProps extends IpodDisplayProps {
   onNext: () => void;
   onPrevious: () => void;
   palette: ArtworkPalette;
-  shuffle: boolean;
+  shuffleMode: ShuffleMode;
+  smartLoading: boolean;
   repeat: boolean;
-  onToggleShuffle: () => void;
+  upNext: QueueItem[];
+  suggestions: SearchSuggestions;
+  onCycleShuffle: () => void;
   onToggleRepeat: () => void;
+  onPlayCollection: (tracks: YoutubeTrack[], mode: ShuffleMode) => void;
+  onAddToQueue: (track: YoutubeTrack) => void;
+  onPlayNext: (track: YoutubeTrack) => void;
+  onRemoveFromQueue: (item: QueueItem) => void;
+  onJumpTo: (item: QueueItem) => void;
+  onSearchText: (text: string) => void;
+  settings: ProfileSettings;
+  theme: ResolvedTheme;
+  onOpenSettings: () => void;
+  volume: number;
+  onVolumeChange: (volume: number) => void;
+  discover: UseDiscoverResult;
+  discoverTarget: DiscoverTarget | null;
+  ytPlayed: YoutubeTrack[];
+  onOpenTarget: (target: DiscoverTarget) => void;
+  onOpenGenres: () => void;
+  onSaveRemote: (playlist: ImportedPlaylist, title: string) => void;
+}
+
+const SHUFFLE_LABELS: Record<ShuffleMode, string> = {
+  off: "Aleatorio desactivado",
+  on: "Aleatorio",
+  smart: "Aleatorio inteligente",
+};
+
+/** Botones para reproducir una sección entera: en orden, mezclada o inteligente. */
+function CollectionActions({
+  tracks,
+  app,
+  children,
+}: {
+  tracks: YoutubeTrack[];
+  app: ModernAppProps;
+  children?: ReactNode;
+}) {
+  if (tracks.length === 0) return null;
+  return (
+    <div className="m-actions m-collection-actions">
+      <button
+        type="button"
+        className="m-primary"
+        onClick={() => app.onPlayCollection(tracks, "off")}
+      >
+        <Icon name="play" />
+        Reproducir
+      </button>
+      <button
+        type="button"
+        className="m-icon-btn filled"
+        onClick={() => app.onPlayCollection(tracks, "on")}
+        aria-label="Reproducir en aleatorio"
+        title="Aleatorio"
+      >
+        <Icon name="shuffle" />
+      </button>
+      <button
+        type="button"
+        className="m-icon-btn filled m-smart-btn"
+        onClick={() => app.onPlayCollection(tracks, "smart")}
+        aria-label="Aleatorio inteligente: mezcla canciones parecidas"
+        title="Aleatorio inteligente"
+      >
+        <Icon name="sparkle" />
+      </button>
+      {children}
+    </div>
+  );
 }
 
 function useStableCallback<Args extends unknown[], Result>(
@@ -66,15 +153,6 @@ function closeKeyboard() {
   if (document.activeElement instanceof HTMLElement) {
     document.activeElement.blur();
   }
-}
-
-function shuffled<T>(items: T[]): T[] {
-  const copy = [...items];
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    const other = Math.floor(Math.random() * (index + 1));
-    [copy[index], copy[other]] = [copy[other], copy[index]];
-  }
-  return copy;
 }
 
 function Artwork({ url, label }: { url: string | null; label?: string }) {
@@ -264,39 +342,217 @@ interface ScreenProps {
   list: SharedListProps;
 }
 
-type HomeFilter = "all" | "likes" | "downloads" | "queue";
+function greeting(name: string): string {
+  const hour = new Date().getHours();
+  const base = hour < 12 ? "Buenos días" : hour < 19 ? "Buenas tardes" : "Buenas noches";
+  const first = name.trim().split(/\s+/)[0];
+  return first ? `${base}, ${first}` : base;
+}
 
-function uniqueTracks(groups: YoutubeTrack[][]): YoutubeTrack[] {
-  const seen = new Set<string>();
-  return groups.flat().filter((track) => {
-    if (seen.has(track.videoId)) return false;
-    seen.add(track.videoId);
-    return true;
-  });
+/** Tarjeta cuadrada de una canción: al tocarla suena con el resto de su sección. */
+function TrackCard({
+  track,
+  queue,
+  app,
+  list,
+}: {
+  track: YoutubeTrack;
+  queue: YoutubeTrack[];
+  app: ModernAppProps;
+  list: SharedListProps;
+}) {
+  const current = track.videoId === list.currentVideoId;
+  return (
+    <button
+      type="button"
+      className="m-shelf-item m-card"
+      onClick={() => (current ? app.onOpenNowPlaying() : app.onPlayTrack(track, queue))}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        list.onMore(track);
+      }}
+      aria-label={`Reproducir ${track.title} de ${track.artist}`}
+    >
+      <span className="m-card-art">
+        <PlayerArtwork url={track.thumbnailUrl} label="" />
+        <i className={current ? "on" : ""}>
+          <Icon name={current && list.playing ? "pause" : "play"} />
+        </i>
+      </span>
+      <strong>{track.title}</strong>
+      <small>
+        {list.likedIds.has(track.videoId) && <Icon name="heartFilled" />}
+        {track.artist}
+      </small>
+    </button>
+  );
+}
+
+function DiscoverCard({
+  item,
+  queue,
+  app,
+  list,
+}: {
+  item: DiscoverItem;
+  queue: YoutubeTrack[];
+  app: ModernAppProps;
+  list: SharedListProps;
+}) {
+  if (item.kind === "song" && item.track) {
+    return <TrackCard track={item.track} queue={queue} app={app} list={list} />;
+  }
+  return (
+    <button
+      type="button"
+      className="m-shelf-item m-card"
+      onClick={() =>
+        app.onOpenTarget({
+          kind: "remote",
+          id: item.id,
+          title: item.title,
+          subtitle: item.subtitle,
+          thumbnailUrl: item.thumbnailUrl,
+        })
+      }
+    >
+      <span className="m-card-art">
+        <PlayerArtwork url={item.thumbnailUrl} label="" />
+      </span>
+      <strong>{item.title}</strong>
+      <small>{item.subtitle}</small>
+    </button>
+  );
+}
+
+function Shelves({
+  shelves,
+  app,
+  list,
+}: {
+  shelves: DiscoverShelf[];
+  app: ModernAppProps;
+  list: SharedListProps;
+}) {
+  return (
+    <>
+      {shelves.map((shelf) => {
+        const songs = shelf.items
+          .map((item) => item.track)
+          .filter((track): track is YoutubeTrack => track !== null);
+        return (
+          <section key={shelf.title}>
+            <h2>{shelf.title}</h2>
+            <div className="m-shelf">
+              {shelf.items.map((item) => (
+                <DiscoverCard
+                  key={`${item.kind}-${item.id}`}
+                  item={item}
+                  queue={songs}
+                  app={app}
+                  list={list}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
+/** Columnas de 4 canciones que se deslizan de lado, como las Selecciones. */
+function PicksGrid({ tracks, list }: { tracks: YoutubeTrack[]; list: SharedListProps }) {
+  return (
+    <div className="m-picks">
+      {tracks.map((track) => {
+        const current = track.videoId === list.currentVideoId;
+        const liked = list.likedIds.has(track.videoId);
+        return (
+          <div className={`m-track m-pick ${current ? "current" : ""}`} key={track.videoId}>
+            <button
+              type="button"
+              className="m-track-main"
+              onClick={() => list.onPlay(track, tracks)}
+              aria-label={`Reproducir ${track.title} de ${track.artist}`}
+            >
+              <span className="m-track-art">
+                <Artwork url={track.thumbnailUrl} />
+              </span>
+              <span className="m-track-text">
+                <strong>{track.title}</strong>
+                <small>
+                  {liked && <Icon name="heartFilled" />}
+                  {track.artist}
+                </small>
+              </span>
+            </button>
+            <button
+              type="button"
+              className="m-icon-btn"
+              onClick={() => list.onMore(track)}
+              aria-label={`Más opciones de ${track.title}`}
+            >
+              <Icon name="more" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MoodTiles({
+  moods,
+  app,
+  limit,
+}: {
+  moods: MoodGroup[];
+  app: ModernAppProps;
+  limit?: number;
+}) {
+  return (
+    <>
+      {moods.map((group) => (
+        <section key={group.title}>
+          <h2>{group.title}</h2>
+          <div className="m-moods">
+            {group.items.slice(0, limit ?? group.items.length).map((mood) => (
+              <button
+                type="button"
+                key={mood.params}
+                className="m-mood"
+                style={{ "--m-mood": mood.color ?? "var(--m-accent)" } as CSSProperties}
+                onClick={() =>
+                  app.onOpenTarget({
+                    kind: "category",
+                    browseId: mood.browseId,
+                    params: mood.params,
+                    title: mood.title,
+                    color: mood.color,
+                  })
+                }
+              >
+                {mood.title}
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </>
+  );
 }
 
 function HomeScreen({ app, list }: ScreenProps) {
-  const [filter, setFilter] = useState<HomeFilter>("all");
-  const pool = useMemo(() => {
-    if (filter === "likes") return app.ytLikes;
-    if (filter === "downloads") return app.ytDownloads;
-    if (filter === "queue") return app.ytQueue;
-    return uniqueTracks([
-      app.ytQueue.slice(0, 40),
-      app.ytLikes.slice(0, 40),
-      app.ytDownloads.slice(0, 40),
-      ...app.playlists.map((playlist) => playlist.tracks.slice(0, 12)),
-    ]);
-  }, [filter, app.ytQueue, app.ytLikes, app.ytDownloads, app.playlists]);
-  const filters: Array<[HomeFilter, string, boolean]> = [
-    ["all", "Para ti", true],
-    ["likes", "Me gusta", app.ytLikes.length > 0],
-    ["downloads", "Descargadas", app.ytDownloads.length > 0],
-    ["queue", "En cola", app.ytQueue.length > 0],
-  ];
-  const quick = pool.slice(0, 6);
-  const more = pool.slice(6, 11);
-  const isEmpty = pool.length === 0 && app.playlists.length === 0;
+  const discover = app.discover;
+  const recent = app.ytPlayed.slice(0, 14);
+  const empty =
+    !discover.chip &&
+    recent.length === 0 &&
+    discover.picks.length === 0 &&
+    discover.shelves.length === 0 &&
+    app.playlists.length === 0 &&
+    !discover.shelvesLoading;
 
   return (
     <>
@@ -304,164 +560,406 @@ function HomeScreen({ app, list }: ScreenProps) {
         <img src="/favicon.png" alt="" />
         FoYu
       </h1>
+      <p className="m-greeting">{greeting(app.settings.profile.displayName)}</p>
 
-      {isEmpty ? (
-        <section className="m-welcome">
-          <h2>Empieza con tu música</h2>
-          <p>Busca una canción o trae una playlist desde otro servicio.</p>
-          <div>
-            <button type="button" className="m-primary" onClick={app.onOpenSearch}>
-              <Icon name="search" />
-              Buscar
-            </button>
-            <button
-              type="button"
-              className="m-secondary"
-              onClick={app.onOpenPlaylists}
-            >
-              <Icon name="link" />
-              Importar
-            </button>
-          </div>
-        </section>
+      <div className="m-chips m-chips-scroll">
+        <button
+          type="button"
+          className={!discover.chip ? "active" : ""}
+          aria-pressed={!discover.chip}
+          onClick={() => discover.selectChip(null)}
+        >
+          Para ti
+        </button>
+        {discover.chips.map((chip) => (
+          <button
+            type="button"
+            key={chip.params}
+            className={discover.chip?.params === chip.params ? "active" : ""}
+            aria-pressed={discover.chip?.params === chip.params}
+            onClick={() => discover.selectChip(chip)}
+          >
+            {chip.title}
+          </button>
+        ))}
+      </div>
+
+      {discover.chip ? (
+        <>
+          {discover.shelvesLoading && <p className="m-empty">Cargando…</p>}
+          {discover.shelvesError && <p className="m-error">{discover.shelvesError}</p>}
+          <Shelves shelves={discover.shelves} app={app} list={list} />
+        </>
       ) : (
         <>
-          <div className="m-chips">
-            {filters
-              .filter(([, , visible]) => visible)
-              .map(([id, label]) => (
-                <button
-                  type="button"
-                  key={id}
-                  className={filter === id ? "active" : ""}
-                  aria-pressed={filter === id}
-                  onClick={() => setFilter(id)}
-                >
-                  {label}
+          {empty && (
+            <section className="m-welcome">
+              <h2>Empieza con tu música</h2>
+              <p>
+                Busca una canción o dale Me gusta: con eso FoYu arma tus
+                Selecciones y mezclas parecidas a lo que te gusta.
+              </p>
+              <div>
+                <button type="button" className="m-primary" onClick={app.onOpenSearch}>
+                  <Icon name="search" />
+                  Buscar
                 </button>
-              ))}
-          </div>
-
-          {quick.length > 0 && (
-            <section className="m-first">
-              <h2>Acceso rápido</h2>
-              <div className="m-quick">
-                {quick.map((track) => {
-                  const current = track.videoId === list.currentVideoId;
-                  return (
-                    <button
-                      type="button"
-                      key={track.videoId}
-                      className="m-quick-tile"
-                      onClick={() =>
-                        current ? app.onOpenNowPlaying() : app.onPlayTrack(track, pool)
-                      }
-                      aria-label={`Reproducir ${track.title} de ${track.artist}`}
-                    >
-                      <PlayerArtwork url={track.thumbnailUrl} label="" />
-                      {current && (
-                        <i>
-                          <Icon name={list.playing ? "pause" : "play"} />
-                        </i>
-                      )}
-                      <span>{track.title}</span>
-                    </button>
-                  );
-                })}
+                <button type="button" className="m-secondary" onClick={app.onOpenPlaylists}>
+                  <Icon name="link" />
+                  Importar
+                </button>
               </div>
             </section>
           )}
+
+          {(discover.picks.length > 0 || discover.personalLoading) && (
+            <section className="m-first">
+              <div className="m-section-head">
+                <h2>Selecciones</h2>
+                <button
+                  type="button"
+                  className="m-icon-btn"
+                  onClick={discover.refreshPersonal}
+                  disabled={discover.personalLoading}
+                  aria-label="Nuevas selecciones"
+                  title="Nuevas selecciones"
+                >
+                  {discover.personalLoading ? <span className="m-spinner" /> : <Icon name="refresh" />}
+                </button>
+              </div>
+              {discover.picks.length > 0 ? (
+                <PicksGrid tracks={discover.picks} list={list} />
+              ) : (
+                <p className="m-hint">Buscando canciones para ti…</p>
+              )}
+            </section>
+          )}
+
+          {recent.length > 0 && (
+            <section>
+              <h2>Sigue escuchando</h2>
+              <div className="m-shelf">
+                {recent.map((track) => (
+                  <TrackCard key={track.videoId} track={track} queue={recent} app={app} list={list} />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {discover.similar.map((mix) => (
+            <section key={mix.artist}>
+              <h2>
+                <small className="m-overline">Similares a</small>
+                {mix.artist}
+              </h2>
+              <div className="m-shelf">
+                {mix.tracks.map((track) => (
+                  <TrackCard key={track.videoId} track={track} queue={mix.tracks} app={app} list={list} />
+                ))}
+              </div>
+            </section>
+          ))}
+
+          {discover.shelvesError && (
+            <div className="m-notice">
+              <span>No se pudieron cargar las listas de la comunidad.</span>
+              <button type="button" onClick={discover.retry}>
+                Reintentar
+              </button>
+            </div>
+          )}
+          <Shelves shelves={discover.shelves} app={app} list={list} />
+
+          {app.playlists.length > 0 && (
+            <section>
+              <h2>Tus playlists</h2>
+              <div className="m-shelf">
+                {app.playlists.slice(0, 12).map((playlist) => (
+                  <button
+                    type="button"
+                    key={playlist.id}
+                    className="m-shelf-item"
+                    onClick={() => app.onOpenPlaylist(playlist.id)}
+                  >
+                    <PlaylistCover playlist={playlist} />
+                    <strong>{playlist.title}</strong>
+                    <small>{playlist.tracks.length} canciones</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {discover.moods.length > 0 && (
+            <>
+              <MoodTiles moods={discover.moods.slice(0, 1)} app={app} limit={8} />
+              <button type="button" className="m-see-all" onClick={app.onOpenGenres}>
+                <Icon name="compass" />
+                Ver géneros y estados de ánimo
+              </button>
+            </>
+          )}
         </>
       )}
+    </>
+  );
+}
 
-      {app.playlists.length > 0 && (
-        <section>
-          <h2>Tus playlists</h2>
-          <div className="m-shelf">
-            {app.playlists.slice(0, 12).map((playlist) => (
-              <button
-                type="button"
-                key={playlist.id}
-                className="m-shelf-item"
-                onClick={() => app.onOpenPlaylist(playlist.id)}
-              >
-                <PlaylistCover playlist={playlist} />
-                <strong>{playlist.title}</strong>
-                <small>{playlist.tracks.length} canciones</small>
-              </button>
-            ))}
-          </div>
-        </section>
+const remoteCache = new Map<string, Promise<ImportedPlaylist>>();
+
+function loadRemote(id: string) {
+  let found = remoteCache.get(id);
+  if (!found) {
+    found = fetchPlaylist(id);
+    found.catch(() => remoteCache.delete(id));
+    remoteCache.set(id, found);
+  }
+  return found;
+}
+
+/** Playlist de la comunidad o álbum abierto desde Inicio, sin guardarlo aún. */
+function RemoteScreen({
+  target,
+  app,
+  list,
+}: ScreenProps & { target: Extract<DiscoverTarget, { kind: "remote" }> }) {
+  const [playlist, setPlaylist] = useState<ImportedPlaylist | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const saved = app.playlists.some((item) => item.id === target.id);
+
+  useEffect(() => {
+    let active = true;
+    setPlaylist(null);
+    setError(null);
+    loadRemote(target.id)
+      .then((found) => {
+        if (active) setPlaylist(found);
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [target.id]);
+
+  const tracks = playlist?.tracks ?? [];
+  const total = tracks.reduce((sum, track) => sum + track.durationSec, 0);
+
+  return (
+    <>
+      <div className="m-hero">
+        <PlayerArtwork key={target.thumbnailUrl} url={target.thumbnailUrl} label="" />
+      </div>
+      <div className="m-hero-copy">
+        <h1>{target.title}</h1>
+        <p>
+          {[
+            target.subtitle.split(" • ")[0],
+            playlist ? `${tracks.length} canciones` : "",
+            total > 0 ? formatTotalDuration(total) : "",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
+      </div>
+
+      {playlist && (
+        <CollectionActions tracks={tracks} app={app}>
+          <button
+            type="button"
+            className={`m-icon-btn filled ${saved ? "accent" : ""}`}
+            disabled={saved}
+            onClick={() => app.onSaveRemote(playlist, target.title)}
+            aria-label={saved ? "Guardada en tu biblioteca" : "Guardar en tu biblioteca"}
+            title={saved ? "Guardada" : "Guardar en biblioteca"}
+          >
+            <Icon name={saved ? "check" : "plus"} />
+          </button>
+        </CollectionActions>
       )}
 
-      {more.length > 0 && (
-        <section>
-          <h2>Selección rápida</h2>
-          <TrackList {...list} tracks={more} />
-        </section>
+      {error ? (
+        <p className="m-error">{error}</p>
+      ) : !playlist ? (
+        <p className="m-empty">Cargando canciones…</p>
+      ) : (
+        <TrackList key={target.id} {...list} tracks={tracks} emptyText="Esta lista no tiene canciones" />
       )}
+    </>
+  );
+}
 
-      {app.history.length > 0 && (
-        <section>
-          <h2>Sonó en otras apps</h2>
-          <div className="m-tracks">
-            {app.history.slice(0, 5).map((track, index) => (
-              <div className="m-track" key={`${track.title}-${index}`}>
-                <span className="m-track-main">
-                  <span className="m-track-art">
-                    <Artwork url={track.artworkDataUrl} />
-                  </span>
-                  <span className="m-track-text">
-                    <strong>{track.title}</strong>
-                    <small>{track.artist}</small>
-                  </span>
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
+const categoryCache = new Map<string, Promise<DiscoverPage>>();
+
+function CategoryScreen({
+  target,
+  app,
+  list,
+}: ScreenProps & { target: Extract<DiscoverTarget, { kind: "category" }> }) {
+  const [page, setPage] = useState<DiscoverPage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let found = categoryCache.get(target.params);
+    if (!found) {
+      found = fetchDiscover({ browseId: target.browseId, params: target.params });
+      found.catch(() => categoryCache.delete(target.params));
+      categoryCache.set(target.params, found);
+    }
+    setPage(null);
+    setError(null);
+    found
+      .then((next) => {
+        if (active) setPage(next);
+      })
+      .catch(() => {
+        if (active) setError("No se pudo cargar. Revisa tu conexión.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [target.browseId, target.params]);
+
+  return (
+    <>
+      <div
+        className="m-category-head"
+        style={{ "--m-mood": target.color ?? "var(--m-accent)" } as CSSProperties}
+      >
+        <h1 className="m-title">{target.title}</h1>
+      </div>
+      {error && <p className="m-error">{error}</p>}
+      {!page && !error && <p className="m-empty">Cargando…</p>}
+      {page && <Shelves shelves={page.shelves} app={app} list={list} />}
+    </>
+  );
+}
+
+function GenresScreen({ app }: { app: ModernAppProps }) {
+  return (
+    <>
+      <h1 className="m-title">Explorar</h1>
+      {app.discover.moods.length === 0 ? (
+        <p className="m-empty">Cargando géneros…</p>
+      ) : (
+        <MoodTiles moods={app.discover.moods} app={app} />
       )}
     </>
   );
 }
 
 function SearchScreen({ app, list }: ScreenProps) {
+  const [focused, setFocused] = useState(false);
+  const { queries, tracks: songMatches } = app.suggestions;
+  const typed = app.ytQuery.trim().toLowerCase();
+  const visibleQueries = queries.filter((item) => item.toLowerCase() !== typed);
+  const showSuggestions =
+    focused && typed.length >= 2 && (visibleQueries.length > 0 || songMatches.length > 0);
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     closeKeyboard();
     app.onSearch();
   };
 
+  const pickQuery = (text: string) => {
+    closeKeyboard();
+    setFocused(false);
+    app.onSearchText(text);
+  };
+
   return (
     <>
       <h1 className="m-title">Buscar</h1>
-      <form className="m-field" onSubmit={submit} role="search">
-        <Icon name="search" />
-        <input
-          value={app.ytQuery}
-          onChange={(event) => app.onQueryChange(event.target.value)}
-          placeholder="Canción o artista"
-          aria-label="Buscar canciones"
-          autoFocus
-          autoComplete="off"
-          spellCheck={false}
-          enterKeyHint="search"
-        />
-        <button type="submit" disabled={app.ytSearching}>
-          Buscar
-        </button>
-      </form>
+      <div className="m-search-box">
+        <form className="m-field" onSubmit={submit} role="search">
+          <Icon name="search" />
+          <input
+            value={app.ytQuery}
+            onChange={(event) => app.onQueryChange(event.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => window.setTimeout(() => setFocused(false), 150)}
+            placeholder="Canción o artista"
+            aria-label="Buscar canciones"
+            aria-autocomplete="list"
+            aria-expanded={showSuggestions}
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+            enterKeyHint="search"
+          />
+          {app.ytQuery && (
+            <button
+              type="button"
+              className="m-field-clear"
+              onClick={() => app.onQueryChange("")}
+              aria-label="Borrar búsqueda"
+            >
+              <Icon name="close" />
+            </button>
+          )}
+        </form>
 
-      {app.ytSearching ? (
-        <p className="m-empty">Buscando…</p>
-      ) : app.ytError ? (
+        {showSuggestions && (
+          <div className="m-suggest" role="listbox" aria-label="Sugerencias">
+            {songMatches.map((track) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={false}
+                key={track.videoId}
+                className="m-suggest-song"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  closeKeyboard();
+                  setFocused(false);
+                  app.onPlayTrack(track, [track, ...app.ytResults.filter(
+                    (item) => item.videoId !== track.videoId,
+                  )]);
+                }}
+              >
+                <span className="m-track-art">
+                  <Artwork url={track.thumbnailUrl} />
+                </span>
+                <span className="m-track-text">
+                  <strong>{track.title}</strong>
+                  <small>Canción · {track.artist}</small>
+                </span>
+                <Icon name="play" />
+              </button>
+            ))}
+            {visibleQueries.map((text) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={false}
+                key={text}
+                className="m-suggest-query"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pickQuery(text)}
+              >
+                <Icon name="search" />
+                <span>{text}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {app.ytError ? (
         <p className="m-error">{app.ytError}</p>
+      ) : app.ytSearching && app.ytResults.length === 0 ? (
+        <p className="m-empty">Buscando…</p>
       ) : (
-        <TrackList
-          {...list}
-          tracks={app.ytResults}
-          emptyText="Escribe una canción o un artista"
-        />
+        <div className={app.ytSearching ? "m-refreshing" : undefined}>
+          <TrackList
+            {...list}
+            tracks={app.ytResults}
+            emptyText="Escribe una canción o un artista"
+          />
+        </div>
       )}
     </>
   );
@@ -590,10 +1088,7 @@ function PlaylistScreen({
   );
   const cover = playlist.tracks.find((track) => track.thumbnailUrl)?.thumbnailUrl;
 
-  const playAll = (random: boolean) => {
-    const queue = random ? shuffled(playlist.tracks) : playlist.tracks;
-    if (queue[0]) app.onPlayTrack(queue[0], queue);
-  };
+  const playAll = (mode: ShuffleMode) => app.onPlayCollection(playlist.tracks, mode);
 
   return (
     <>
@@ -619,7 +1114,7 @@ function PlaylistScreen({
           type="button"
           className="m-icon-btn filled"
           disabled={playlist.tracks.length === 0}
-          onClick={() => playAll(true)}
+          onClick={() => playAll("on")}
           aria-label="Reproducir en aleatorio"
           title="Aleatorio"
         >
@@ -629,10 +1124,20 @@ function PlaylistScreen({
           type="button"
           className="m-primary"
           disabled={playlist.tracks.length === 0}
-          onClick={() => playAll(false)}
+          onClick={() => playAll("off")}
         >
           <Icon name="play" />
           Reproducir
+        </button>
+        <button
+          type="button"
+          className="m-icon-btn filled m-smart-btn"
+          disabled={playlist.tracks.length === 0}
+          onClick={() => playAll("smart")}
+          aria-label="Aleatorio inteligente: mezcla canciones parecidas"
+          title="Aleatorio inteligente"
+        >
+          <Icon name="sparkle" />
         </button>
         {playlist.sourceLink && (
           <button
@@ -721,6 +1226,12 @@ function TrackOptions({
           </button>
         </header>
         <div className="sheet-list">
+          <button type="button" onClick={() => run(() => app.onPlayNext(track))}>
+            <span>Reproducir a continuación</span>
+          </button>
+          <button type="button" onClick={() => run(() => app.onAddToQueue(track))}>
+            <span>Añadir a la cola</span>
+          </button>
           <button type="button" onClick={() => run(() => app.onAddToPlaylist(track))}>
             <span>Añadir a una playlist</span>
           </button>
@@ -736,7 +1247,7 @@ function TrackOptions({
           >
             <span>{downloaded ? "Eliminar descarga" : "Descargar"}</span>
           </button>
-          {playlist && (
+          {playlist?.tracks.some((item) => item.videoId === track.videoId) && (
             <button
               type="button"
               onClick={() =>
@@ -866,12 +1377,14 @@ function FullPlayer({
           <div className="m-player-extras">
             <button
               type="button"
-              className={app.shuffle ? "active" : ""}
-              onClick={app.onToggleShuffle}
-              aria-pressed={app.shuffle}
-              aria-label="Aleatorio"
+              className={`${app.shuffleMode !== "off" ? "active" : ""} ${
+                app.shuffleMode === "smart" ? "smart" : ""
+              }`}
+              onClick={app.onCycleShuffle}
+              aria-label={`${SHUFFLE_LABELS[app.shuffleMode]}. Toca para cambiar`}
+              title={SHUFFLE_LABELS[app.shuffleMode]}
             >
-              <Icon name="shuffle" />
+              <Icon name={app.shuffleMode === "smart" ? "sparkle" : "shuffle"} />
             </button>
             <button
               type="button"
@@ -911,24 +1424,94 @@ function FullPlayer({
           >
             <header className="sheet-header">
               <div>
-                <strong>Cola</strong>
-                <small>{countLabel(app.ytQueue.length, "canción", "canciones")}</small>
+                <strong>A continuación</strong>
+                <small>
+                  {SHUFFLE_LABELS[app.shuffleMode]}
+                  {app.smartLoading ? " · buscando canciones parecidas…" : ""}
+                </small>
               </div>
               <button type="button" onClick={() => setQueueOpen(false)}>
                 Cerrar
               </button>
             </header>
-            <div className="m-queue-list">
-              <TrackList
-                {...list}
-                tracks={app.ytQueue}
-                emptyText="La cola está vacía"
-              />
-            </div>
+            <UpNextList app={app} list={list} />
           </section>
         </div>
       )}
     </>
+  );
+}
+
+function UpNextList({ app, list }: ScreenProps) {
+  const groups: Array<[string, QueueItem[]]> = [
+    ["Añadidas por ti", app.upNext.filter((item) => item.kind === "manual")],
+    ["Siguientes", app.upNext.filter((item) => item.kind !== "manual")],
+  ];
+
+  if (app.upNext.length === 0) {
+    return (
+      <div className="m-queue-list">
+        <p className="m-empty">
+          No hay más canciones en la cola. Abre las opciones de una canción y
+          elige «Añadir a la cola».
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="m-queue-list">
+      {groups
+        .filter(([, items]) => items.length > 0)
+        .map(([title, items]) => (
+          <section key={title}>
+            <h3 className="m-queue-title">{title}</h3>
+            <div className="m-tracks">
+              {items.map((item) => (
+                <div
+                  className={`m-track ${item.kind === "smart" ? "smart" : ""}`}
+                  key={`${item.kind}-${item.index}-${item.track.videoId}`}
+                >
+                  <button
+                    type="button"
+                    className="m-track-main"
+                    onClick={() => app.onJumpTo(item)}
+                    aria-label={`Reproducir ${item.track.title}`}
+                  >
+                    <span className="m-track-art">
+                      <Artwork url={item.track.thumbnailUrl} />
+                    </span>
+                    <span className="m-track-text">
+                      <strong>{item.track.title}</strong>
+                      <small>
+                        {item.kind === "smart" && <Icon name="sparkle" />}
+                        {item.kind === "smart" ? "Recomendada · " : ""}
+                        {item.track.artist}
+                      </small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="m-icon-btn"
+                    onClick={() => list.onMore(item.track)}
+                    aria-label={`Más opciones de ${item.track.title}`}
+                  >
+                    <Icon name="more" />
+                  </button>
+                  <button
+                    type="button"
+                    className="m-icon-btn"
+                    onClick={() => app.onRemoveFromQueue(item)}
+                    aria-label={`Quitar ${item.track.title} de la cola`}
+                  >
+                    <Icon name="close" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+    </div>
   );
 }
 
@@ -981,14 +1564,285 @@ function MiniPlayer({ app }: { app: ModernAppProps }) {
   );
 }
 
+
+function useDesktopLayout(): boolean {
+  const query = "(min-width: 860px)";
+  const [wide, setWide] = useState(
+    () => !IS_ANDROID && window.matchMedia(query).matches,
+  );
+  useEffect(() => {
+    if (IS_ANDROID) return;
+    const media = window.matchMedia(query);
+    const update = () => setWide(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return wide;
+}
+
+/** Barra inferior del PC: canción, controles con tiempo y volumen. */
+function PlayerBar({
+  app,
+  onShowQueue,
+}: {
+  app: ModernAppProps;
+  onShowQueue: () => void;
+}) {
+  const { state, ytCurrent } = app;
+  const playing = state.status === "playing";
+  const hasTrack = state.connected && state.title.length > 0;
+  const isYoutube = app.source === "youtube" && ytCurrent !== null;
+  const liked =
+    isYoutube && app.ytLikes.some((item) => item.videoId === ytCurrent.videoId);
+
+  return (
+    <footer className="m-playerbar" aria-label="Reproductor">
+      <div className="m-playerbar-track">
+        {hasTrack ? (
+          <>
+            <button
+              type="button"
+              className="m-playerbar-art"
+              onClick={app.onOpenNowPlaying}
+              aria-label={`Abrir reproductor: ${state.title}`}
+            >
+              <Artwork url={state.artworkDataUrl} />
+            </button>
+            <span className="m-track-text">
+              <strong>{state.title}</strong>
+              <small>{state.artist}</small>
+            </span>
+            {isYoutube && (
+              <button
+                type="button"
+                className={`m-icon-btn ${liked ? "accent" : ""}`}
+                onClick={() => app.onToggleLike(ytCurrent)}
+                aria-pressed={liked}
+                aria-label={liked ? "Quitar de Me gusta" : "Añadir a Me gusta"}
+              >
+                <Icon name={liked ? "heartFilled" : "heart"} />
+              </button>
+            )}
+          </>
+        ) : (
+          <span className="m-track-text">
+            <small>Elige una canción para empezar</small>
+          </span>
+        )}
+      </div>
+
+      <div className="m-playerbar-center">
+        <div className="m-playerbar-controls">
+          <button
+            type="button"
+            className={`m-icon-btn ${app.shuffleMode !== "off" ? "accent" : ""}`}
+            onClick={app.onCycleShuffle}
+            aria-label={`${SHUFFLE_LABELS[app.shuffleMode]}. Toca para cambiar`}
+            title={SHUFFLE_LABELS[app.shuffleMode]}
+          >
+            <Icon name={app.shuffleMode === "smart" ? "sparkle" : "shuffle"} />
+          </button>
+          <button
+            type="button"
+            className="m-icon-btn"
+            onClick={app.onPrevious}
+            disabled={!hasTrack}
+            aria-label="Anterior"
+          >
+            <Icon name="previous" />
+          </button>
+          <button
+            type="button"
+            className="m-playerbar-play"
+            onClick={app.onPlayPause}
+            disabled={!hasTrack}
+            aria-label={playing ? "Pausar" : "Reproducir"}
+          >
+            {app.ytLoading && isYoutube ? (
+              <span className="m-spinner" />
+            ) : (
+              <Icon name={playing ? "pause" : "play"} />
+            )}
+          </button>
+          <button
+            type="button"
+            className="m-icon-btn"
+            onClick={app.onNext}
+            disabled={!hasTrack}
+            aria-label="Siguiente"
+          >
+            <Icon name="next" />
+          </button>
+          <button
+            type="button"
+            className={`m-icon-btn ${app.repeat ? "accent" : ""}`}
+            onClick={app.onToggleRepeat}
+            aria-pressed={app.repeat}
+            aria-label="Repetir canción"
+            title="Repetir canción"
+          >
+            <Icon name="repeat" />
+          </button>
+        </div>
+        <TrackProgress
+          positionSec={app.positionSec}
+          durationSec={state.durationSec}
+          canSeek={state.canSeek}
+          onSeek={app.onSeek}
+        />
+      </div>
+
+      <div className="m-playerbar-side">
+        <button
+          type="button"
+          className="m-icon-btn"
+          onClick={onShowQueue}
+          aria-label="Ver cola"
+          title="Cola"
+        >
+          <Icon name="queue" />
+        </button>
+        <label className="m-volume" title="Volumen">
+          <Icon name="volume" />
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.round(app.volume * 100)}
+            onChange={(event) => app.onVolumeChange(Number(event.target.value) / 100)}
+            aria-label="Volumen"
+          />
+        </label>
+      </div>
+    </footer>
+  );
+}
+
+/** Panel derecho del PC: lo que suena y lo que viene después. */
+function NowPlayingPanel({ app, list }: ScreenProps) {
+  const { state } = app;
+  const hasTrack = state.connected && state.title.length > 0;
+  return (
+    <div className="m-now">
+      <h2>{hasTrack ? "Sonando" : "Cola"}</h2>
+      {hasTrack && (
+        <button
+          type="button"
+          className="m-now-art"
+          onClick={app.onOpenNowPlaying}
+          aria-label="Abrir reproductor"
+        >
+          <PlayerArtwork
+            key={state.artworkDataUrl}
+            url={state.artworkDataUrl}
+            label={state.title}
+          />
+        </button>
+      )}
+      {hasTrack && (
+        <div className="m-track-text m-now-text">
+          <strong>{state.title}</strong>
+          <small>{state.artist}</small>
+        </div>
+      )}
+      <h3 className="m-queue-title">
+        A continuación · {SHUFFLE_LABELS[app.shuffleMode]}
+        {app.smartLoading ? " · buscando…" : ""}
+      </h3>
+      <UpNextList app={app} list={list} />
+    </div>
+  );
+}
+
+function Sidebar({ app, activeTab }: { app: ModernAppProps; activeTab: string }) {
+  const items: Array<[string, string, IconName, () => void]> = [
+    ["menu", "Inicio", "home", app.onOpenMenu],
+    ["search", "Buscar", "search", app.onOpenSearch],
+    ["library", "Biblioteca", "library", app.onOpenPlaylists],
+    ["likes", "Me gusta", "heartFilled", app.onOpenLikes],
+    ["downloads", "Descargadas", "download", app.onOpenDownloads],
+    ["genres", "Explorar", "compass", app.onOpenGenres],
+  ];
+  return (
+    <aside className="m-side" aria-label="Navegación principal">
+      <div className="m-brand m-side-brand">
+        <img src="/favicon.png" alt="" />
+        FoYu
+      </div>
+      <nav className="m-side-nav">
+        {items.map(([id, label, icon, open]) => (
+          <button
+            type="button"
+            key={id}
+            className={activeTab === id ? "active" : ""}
+            aria-current={activeTab === id ? "page" : undefined}
+            onClick={open}
+          >
+            <Icon name={icon} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="m-side-section">
+        <span>Tus playlists</span>
+        <button
+          type="button"
+          className="m-icon-btn"
+          onClick={app.onOpenPlaylists}
+          aria-label="Crear o importar playlist"
+          title="Crear o importar"
+        >
+          <Icon name="plus" />
+        </button>
+      </div>
+      <div className="m-side-list">
+        {app.playlists.map((playlist) => (
+          <button
+            type="button"
+            key={playlist.id}
+            className={
+              activeTab === "playlist" && app.selectedPlaylist?.id === playlist.id
+                ? "active"
+                : ""
+            }
+            onClick={() => app.onOpenPlaylist(playlist.id)}
+          >
+            <span className="m-track-art">
+              <PlaylistCover playlist={playlist} />
+            </span>
+            <span className="m-track-text">
+              <strong>{playlist.title}</strong>
+              <small>{playlist.tracks.length} canciones</small>
+            </span>
+          </button>
+        ))}
+        {app.playlists.length === 0 && (
+          <p className="m-hint">Crea una o pega un enlace en Biblioteca.</p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 export function ModernApp(props: ModernAppProps) {
   const { state, browseView, view } = props;
+  const desktop = useDesktopLayout();
+  const [rightPanel, setRightPanel] = useState<"profile" | "queue">("profile");
+  const [profileSection, setProfileSection] = useState<ProfileSection>("account");
   const hasTrack = state.connected && state.title.length > 0;
   const playerOpen = view === "nowPlaying" && hasTrack;
   const onMore = useStableCallback(props.onOpenTrackOptions);
-
   const onPlay = useStableCallback(props.onPlayTrack);
   const onToggleLike = useStableCallback(props.onToggleLike);
+  const startedTrack = useRef(false);
+
+  // En PC, al empezar a sonar algo el panel derecho muestra la cola una vez.
+  useEffect(() => {
+    if (hasTrack && !startedTrack.current) {
+      startedTrack.current = true;
+      setRightPanel("queue");
+    }
+  }, [hasTrack]);
 
   const likedIds = useMemo(
     () => new Set(props.ytLikes.map((track) => track.videoId)),
@@ -1017,16 +1871,36 @@ export function ModernApp(props: ModernAppProps) {
     onMore,
   };
 
-  const screen: IpodView =
+  let screen: IpodView =
     browseView === "playlist" && !props.selectedPlaylist
       ? "playlists"
       : browseView;
+  // En PC el perfil vive en el panel derecho.
+  if (desktop && screen === "settings") screen = "menu";
+  const target = props.discoverTarget;
+  if ((screen === "remote" && target?.kind !== "remote") || (screen === "category" && target?.kind !== "category")) {
+    screen = "menu";
+  }
+  const heroScreen = screen === "playlist" || screen === "remote";
+  const backScreen = heroScreen || screen === "settings" || screen === "category" || screen === "genres";
+
   const activeTab =
-    screen === "menu" || screen === "nowPlaying"
+    screen === "menu" || screen === "nowPlaying" || screen === "remote" || screen === "category"
       ? "menu"
-      : screen === "search"
-        ? "search"
-        : "library";
+      : screen === "genres"
+        ? desktop
+          ? "genres"
+          : "menu"
+        : screen === "search"
+          ? "search"
+          : screen === "settings"
+            ? "settings"
+            : desktop && (screen === "likes" || screen === "downloads" || screen === "playlist")
+              ? screen
+              : "library";
+  const screenKey = `${screen}-${props.selectedPlaylist?.id ?? ""}-${
+    target?.kind === "remote" ? target.id : target?.kind === "category" ? target.params : ""
+  }`;
 
   const tabs: Array<[string, string, IconName, () => void]> = [
     ["menu", "Inicio", "home", props.onOpenMenu],
@@ -1034,23 +1908,143 @@ export function ModernApp(props: ModernAppProps) {
     ["library", "Biblioteca", "library", props.onOpenPlaylists],
   ];
 
+  const openProfile = (section: ProfileSection) => {
+    setProfileSection(section);
+    if (desktop) setRightPanel("profile");
+    else props.onOpenSettings();
+  };
+
+  const content =
+    screen === "search" ? (
+      <SearchScreen app={props} list={list} />
+    ) : screen === "playlists" ? (
+      <PlaylistsScreen app={props} />
+    ) : screen === "playlist" && props.selectedPlaylist ? (
+      <PlaylistScreen app={props} list={list} playlist={props.selectedPlaylist} />
+    ) : screen === "likes" ? (
+      <>
+        <h1 className="m-title">{desktop ? "Me gusta" : "Biblioteca"}</h1>
+        {!desktop && <LibraryTabs view="likes" app={props} />}
+        <CollectionActions tracks={props.ytLikes} app={props} />
+        <TrackList
+          {...list}
+          tracks={props.ytLikes}
+          emptyText="Toca el corazón de una canción para guardarla aquí"
+        />
+      </>
+    ) : screen === "downloads" ? (
+      <>
+        <h1 className="m-title">{desktop ? "Descargadas" : "Biblioteca"}</h1>
+        {!desktop && <LibraryTabs view="downloads" app={props} />}
+        <CollectionActions tracks={props.ytDownloads} app={props} />
+        {props.ytDownloadError && <p className="m-error">{props.ytDownloadError}</p>}
+        <TrackList
+          {...list}
+          sizes={sizes}
+          tracks={props.ytDownloads}
+          emptyText="Descarga una canción para escucharla sin conexión"
+        />
+      </>
+    ) : screen === "settings" ? (
+      <>
+        <h1 className="m-title">Perfil</h1>
+        <ProfilePanel
+          settings={props.settings}
+          onToggleDesign={props.onToggleDesign}
+          section={profileSection}
+        />
+      </>
+    ) : screen === "remote" && target?.kind === "remote" ? (
+      <RemoteScreen app={props} list={list} target={target} />
+    ) : screen === "category" && target?.kind === "category" ? (
+      <CategoryScreen app={props} list={list} target={target} />
+    ) : screen === "genres" ? (
+      <GenresScreen app={props} />
+    ) : (
+      <HomeScreen app={props} list={list} />
+    );
+
+  const rootStyle = {
+    "--m-accent": props.palette.accent,
+    "--m-tint": props.palette.tint,
+    "--m-deep": props.palette.deep,
+  } as CSSProperties;
+
+  const overlays = (
+    <>
+      {playerOpen && <FullPlayer app={props} list={list} onClose={props.onBack} />}
+      {props.optionsTrack && (
+        <TrackOptions
+          track={props.optionsTrack}
+          app={props}
+          playlist={screen === "playlist" ? props.selectedPlaylist : null}
+          onClose={props.onCloseTrackOptions}
+        />
+      )}
+    </>
+  );
+
+  if (desktop) {
+    return (
+      <div className={`m-root m-desktop theme-${props.theme}`} style={rootStyle}>
+        <div className="m-ambient" aria-hidden />
+        <header className="m-titlebar" data-tauri-drag-region>
+          <button
+            type="button"
+            className="m-icon-btn filled"
+            onClick={props.onBack}
+            aria-label="Volver"
+            title="Volver"
+          >
+            <Icon name="back" />
+          </button>
+          <button
+            type="button"
+            className="m-titlebar-search"
+            onClick={props.onOpenSearch}
+          >
+            <Icon name="search" />
+            <span>¿Qué quieres escuchar?</span>
+          </button>
+          <span className="m-header-space" data-tauri-drag-region />
+          <DesignToggle design="modern" onToggle={props.onToggleDesign} />
+          <ProfileButtons settings={props.settings} onOpen={openProfile} />
+          <WindowControls />
+        </header>
+        <Sidebar app={props} activeTab={activeTab} />
+        <main className="m-main" key={screenKey}>
+          {content}
+        </main>
+        <aside className="m-right" aria-label={rightPanel === "profile" ? "Perfil" : "Cola"}>
+          {rightPanel === "profile" ? (
+            <ProfilePanel
+              settings={props.settings}
+              onToggleDesign={props.onToggleDesign}
+              section={profileSection}
+              onClose={() => setRightPanel("queue")}
+            />
+          ) : (
+            <NowPlayingPanel app={props} list={list} />
+          )}
+        </aside>
+        <PlayerBar app={props} onShowQueue={() => setRightPanel("queue")} />
+        {overlays}
+        <ResizeGrip />
+      </div>
+    );
+  }
+
   return (
     <div
-      className={`m-root ${hasTrack ? "has-track" : ""} ${
-        screen === "playlist" ? "on-playlist" : ""
+      className={`m-root theme-${props.theme} ${hasTrack ? "has-track" : ""} ${
+        heroScreen ? "on-playlist" : ""
       }`}
-      style={
-        {
-          "--m-accent": props.palette.accent,
-          "--m-tint": props.palette.tint,
-          "--m-deep": props.palette.deep,
-        } as CSSProperties
-      }
+      style={rootStyle}
     >
       <div className="m-ambient" aria-hidden />
 
       <header className="m-header" data-tauri-drag-region>
-        {screen === "playlist" && (
+        {backScreen && (
           <button
             type="button"
             className="m-icon-btn filled"
@@ -1072,58 +2066,14 @@ export function ModernApp(props: ModernAppProps) {
           {props.source === "youtube" ? "YT" : "SP"}
         </span>
         <span className="m-header-space" data-tauri-drag-region />
-        {props.cloudAvailable && (
-          <button
-            type="button"
-            className="m-icon-btn filled"
-            onClick={props.onOpenAccount}
-            aria-label="Cuenta"
-            title="Cuenta"
-          >
-            <Icon name="user" />
-          </button>
+        {screen !== "settings" && (
+          <ProfileButtons settings={props.settings} onOpen={openProfile} />
         )}
         {!IS_ANDROID && <WindowControls />}
       </header>
 
-      <main className="m-main" key={`${screen}-${props.selectedPlaylist?.id}`}>
-        {screen === "search" ? (
-          <SearchScreen app={props} list={list} />
-        ) : screen === "playlists" ? (
-          <PlaylistsScreen app={props} />
-        ) : screen === "playlist" && props.selectedPlaylist ? (
-          <PlaylistScreen
-            app={props}
-            list={list}
-            playlist={props.selectedPlaylist}
-          />
-        ) : screen === "likes" ? (
-          <>
-            <h1 className="m-title">Biblioteca</h1>
-            <LibraryTabs view="likes" app={props} />
-            <TrackList
-              {...list}
-              tracks={props.ytLikes}
-              emptyText="Toca el corazón de una canción para guardarla aquí"
-            />
-          </>
-        ) : screen === "downloads" ? (
-          <>
-            <h1 className="m-title">Biblioteca</h1>
-            <LibraryTabs view="downloads" app={props} />
-            {props.ytDownloadError && (
-              <p className="m-error">{props.ytDownloadError}</p>
-            )}
-            <TrackList
-              {...list}
-              sizes={sizes}
-              tracks={props.ytDownloads}
-              emptyText="Descarga una canción para escucharla sin conexión"
-            />
-          </>
-        ) : (
-          <HomeScreen app={props} list={list} />
-        )}
+      <main className="m-main" key={screenKey}>
+        {content}
       </main>
 
       <div className="m-dock">
@@ -1144,17 +2094,7 @@ export function ModernApp(props: ModernAppProps) {
         </nav>
       </div>
 
-      {playerOpen && (
-        <FullPlayer app={props} list={list} onClose={props.onBack} />
-      )}
-      {props.optionsTrack && (
-        <TrackOptions
-          track={props.optionsTrack}
-          app={props}
-          playlist={screen === "playlist" ? props.selectedPlaylist : null}
-          onClose={props.onCloseTrackOptions}
-        />
-      )}
+      {overlays}
       {!IS_ANDROID && <ResizeGrip />}
     </div>
   );

@@ -3,6 +3,7 @@ import { normalizePlaylist } from "../services/librarySync";
 import { fetchPlaylist } from "../services/youtubeMusic";
 import type {
   ImportedCollection,
+  ImportedPlaylist,
   SavedPlaylist,
   YoutubeList,
   YoutubeTrack,
@@ -71,6 +72,7 @@ export interface UsePlaylistsResult {
   error: string | null;
   notice: string | null;
   importFromLink: (link: string) => Promise<string | null>;
+  saveImported: (playlist: ImportedPlaylist, title: string) => string;
   create: (name: string) => string | null;
   addTrack: (id: string, track: YoutubeTrack) => void;
   removeTrack: (id: string, videoId: string) => void;
@@ -155,6 +157,31 @@ export function usePlaylists(): UsePlaylistsResult {
         importingRef.current = false;
         setImporting(false);
       }
+    },
+    [commit, withoutTombstone],
+  );
+
+  /** Guarda en la biblioteca una playlist que ya se abrió desde Inicio. */
+  const saveImported = useCallback(
+    (playlist: ImportedPlaylist, title: string) => {
+      const now = Date.now();
+      commit(
+        [
+          {
+            id: playlist.id,
+            title: title || playlist.title,
+            source: playlist.source,
+            sourceLink: `https://music.youtube.com/playlist?list=${playlist.id}`,
+            tracks: playlist.tracks,
+            importedAt: now,
+            updatedAt: now,
+            youtubeSynced: false,
+          },
+          ...playlistsRef.current.filter((item) => item.id !== playlist.id),
+        ],
+        withoutTombstone(playlist.id),
+      );
+      return playlist.id;
     },
     [commit, withoutTombstone],
   );
@@ -332,6 +359,7 @@ export function usePlaylists(): UsePlaylistsResult {
     error,
     notice,
     importFromLink,
+    saveImported,
     create,
     addTrack,
     removeTrack,

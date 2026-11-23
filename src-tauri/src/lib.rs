@@ -1,5 +1,7 @@
 pub mod music;
 mod commands;
+#[cfg(not(target_os = "android"))]
+mod desktop_auth;
 mod media;
 
 use std::sync::Arc;

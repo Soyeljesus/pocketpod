@@ -3,22 +3,52 @@ import type { MediaState } from "../types/media";
 import type {
   MusicBridgeInfo,
   OfflineTrack,
+  QueueItem,
+  ShuffleMode,
   YoutubeTrack,
 } from "../types/youtube";
 import {
   downloadTrack as requestDownload,
+  fetchRadio,
   getBridgeInfo,
   getOfflineStreamUrl,
   getStreamUrl,
   listDownloads,
   removeDownload as requestRemoveDownload,
   searchYoutubeMusic,
+  suggestYoutubeMusic,
 } from "../services/youtubeMusic";
+import type { SearchSuggestions } from "../services/youtubeMusic";
 
 type PlaybackStatus = "playing" | "paused" | "stopped";
 
 const LIKES_KEY = "pocketpod.youtube.likes";
 const LIKES_UPDATED_KEY = "pocketpod.youtube.likes.updatedAt";
+/** En aleatorio inteligente suena una recomendación cada 3 canciones. */
+const SMART_EVERY = 3;
+const SMART_SEEDS = 4;
+const VOLUME_KEY = "foyu.volume";
+const HISTORY_KEY = "foyu.history";
+const PLAYED_LIMIT = 60;
+
+/** Lo último que escuchaste, solo en este dispositivo. */
+function loadPlayed(): YoutubeTrack[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((item) => item && typeof item.videoId === "string" && item.videoId)
+          .slice(0, PLAYED_LIMIT)
+      : [];
+  } catch {
+    return [];
+  }
+}
+const UP_NEXT_LIMIT = 60;
+const HISTORY_LIMIT = 100;
+const SUGGEST_DELAY_MS = 180;
+const LIVE_SEARCH_DELAY_MS = 550;
+const EMPTY_SUGGESTIONS: SearchSuggestions = { queries: [], tracks: [] };
 
 function describeError(error: unknown): string {
   if (typeof error === "string") return error;
@@ -26,7 +56,16 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
-/** Los "me gusta" son locales: no hay cuenta de YouTube ni backend remoto. */
+function shuffled<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const other = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[other]] = [copy[other], copy[index]];
+  }
+  return copy;
+}
+
+/** Los "me gusta" se guardan en el dispositivo y, con cuenta, en la nube. */
 function loadLikes(): YoutubeTrack[] {
   try {
     const raw = localStorage.getItem(LIKES_KEY);
@@ -73,8 +112,12 @@ export interface UseYoutubeMusicResult {
   state: MediaState;
   positionSec: number;
   current: YoutubeTrack | null;
+  /** Lista desde la que se está reproduciendo. */
   queue: YoutubeTrack[];
+  /** Lo que sonará después, en orden. */
+  upNext: QueueItem[];
   results: YoutubeTrack[];
+  suggestions: SearchSuggestions;
   query: string;
   searching: boolean;
   loading: boolean;
@@ -84,20 +127,31 @@ export interface UseYoutubeMusicResult {
   engine: string | null;
   likes: YoutubeTrack[];
   likesUpdatedAt: number;
+  /** Lo último que sonó, más reciente primero. */
+  played: YoutubeTrack[];
   downloads: OfflineTrack[];
   downloadingId: string | null;
   downloadError: string | null;
-  shuffle: boolean;
+  shuffleMode: ShuffleMode;
+  smartLoading: boolean;
   repeat: boolean;
-  toggleShuffle: () => void;
+  cycleShuffle: () => void;
+  setShuffleMode: (mode: ShuffleMode) => void;
   toggleRepeat: () => void;
   setQuery: (query: string) => void;
-  search: () => Promise<void>;
+  search: (text?: string) => Promise<void>;
   playTrack: (track: YoutubeTrack, queue?: YoutubeTrack[]) => Promise<void>;
+  playCollection: (list: YoutubeTrack[], mode: ShuffleMode) => void;
+  addToQueue: (track: YoutubeTrack) => void;
+  playNext: (track: YoutubeTrack) => void;
+  removeFromQueue: (item: QueueItem) => void;
+  jumpTo: (item: QueueItem) => void;
   playPause: () => void;
   next: () => void;
   previous: () => void;
   seek: (seconds: number) => void;
+  volume: number;
+  setVolume: (volume: number) => void;
   pause: () => void;
   toggleLike: (track: YoutubeTrack) => void;
   addLikes: (tracks: YoutubeTrack[]) => void;
@@ -112,24 +166,44 @@ export interface UseYoutubeMusicResult {
  * El `src` no apunta a YouTube directamente: apunta al puente local
  * (`/stream/{videoId}`), que añade el token, reenvía el `Range` al CDN y evita
  * problemas de CORS o de URLs caducadas.
+ *
+ * La cola tiene tres partes: lo añadido a mano (suena primero), la lista
+ * desde la que se pulsó (en orden o mezclada) y, en aleatorio inteligente,
+ * una recomendación cada 3 canciones. Las recomendaciones se buscan siempre a
+ * partir de la lista donde se activó, no de la última recomendación.
  */
 export function useYoutubeMusic(): UseYoutubeMusicResult {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const requestRef = useRef(0);
   const currentRef = useRef<YoutubeTrack | null>(null);
-  const queueRef = useRef<YoutubeTrack[]>([]);
+  const contextRef = useRef<YoutubeTrack[]>([]);
+  const orderRef = useRef<YoutubeTrack[]>([]);
+  const posRef = useRef(-1);
+  const manualRef = useRef<YoutubeTrack[]>([]);
+  const historyRef = useRef<YoutubeTrack[]>([]);
+  const smartPoolRef = useRef<YoutubeTrack[]>([]);
+  const smartPlayedRef = useRef<Set<string>>(new Set());
+  const sinceSmartRef = useRef(0);
+  const smartGenerationRef = useRef(0);
+  const smartBusyRef = useRef(false);
   const resultsRef = useRef<YoutubeTrack[]>([]);
   const downloadsRef = useRef<OfflineTrack[]>([]);
   const nextRef = useRef<() => void>(() => {});
-  const shuffleRef = useRef(false);
+  const shuffleRef = useRef<ShuffleMode>("off");
   const repeatRef = useRef(false);
+  const searchRequestRef = useRef(0);
+  const lastSearchedRef = useRef("");
 
-  const [shuffle, setShuffle] = useState(false);
+  const [shuffleMode, setShuffleState] = useState<ShuffleMode>("off");
+  const [smartLoading, setSmartLoading] = useState(false);
   const [repeat, setRepeat] = useState(false);
   const [current, setCurrent] = useState<YoutubeTrack | null>(null);
   const [queue, setQueue] = useState<YoutubeTrack[]>([]);
+  const [upNext, setUpNext] = useState<QueueItem[]>([]);
   const [results, setResults] = useState<YoutubeTrack[]>([]);
-  const [query, setQuery] = useState("");
+  const [suggestions, setSuggestions] =
+    useState<SearchSuggestions>(EMPTY_SUGGESTIONS);
+  const [query, setQueryState] = useState("");
   const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,15 +214,29 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
   const [likes, setLikes] = useState<YoutubeTrack[]>(loadLikes);
   const [likesUpdatedAt, setLikesUpdatedAt] = useState(loadLikesUpdatedAt);
   const likesRef = useRef(likes);
+  const [played, setPlayed] = useState<YoutubeTrack[]>(loadPlayed);
   const [downloads, setDownloads] = useState<OfflineTrack[]>([]);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const [volume, setVolumeState] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem(VOLUME_KEY));
+      return Number.isFinite(saved) && localStorage.getItem(VOLUME_KEY) !== null
+        ? Math.min(1, Math.max(0, saved))
+        : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const volumeRef = useRef(volume);
 
   const getAudio = useCallback((): HTMLAudioElement => {
     if (audioRef.current) return audioRef.current;
 
     const audio = new Audio();
     audio.preload = "auto";
+    audio.volume = volumeRef.current;
 
     audio.addEventListener("play", () => setStatus("playing"));
     audio.addEventListener("pause", () => setStatus("paused"));
@@ -231,22 +319,144 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     };
   }, []);
 
-  const playTrack = useCallback(
-    async (track: YoutubeTrack, nextQueue?: YoutubeTrack[]) => {
+  /** Recalcula lo que sonará después con las mismas reglas que `next`. */
+  const refreshUpNext = useCallback(() => {
+    const items: QueueItem[] = manualRef.current.map((track, index) => ({
+      track,
+      kind: "manual",
+      index,
+    }));
+    const order = orderRef.current;
+    const smart = shuffleRef.current === "smart";
+    let since = sinceSmartRef.current;
+    let smartIndex = 0;
+    let pos = posRef.current;
+    let steps = 0;
+
+    while (items.length < UP_NEXT_LIMIT && order.length > 0) {
+      if (
+        smart &&
+        since >= SMART_EVERY &&
+        smartIndex < smartPoolRef.current.length
+      ) {
+        items.push({
+          track: smartPoolRef.current[smartIndex],
+          kind: "smart",
+          index: smartIndex,
+        });
+        smartIndex += 1;
+        since = 0;
+        continue;
+      }
+      // Al terminar, la lista vuelve a empezar: se muestra hasta una vuelta
+      // completa (más las recomendaciones que caben entre medias).
+      if (steps >= order.length) break;
+      pos = (pos + 1) % order.length;
+      items.push({ track: order[pos], kind: "context", index: pos });
+      since += 1;
+      steps += 1;
+    }
+    setUpNext(items);
+  }, []);
+
+  const loadSmart = useCallback(() => {
+    if (shuffleRef.current !== "smart" || smartBusyRef.current) return;
+    const context = contextRef.current;
+    if (context.length === 0) return;
+
+    const generation = smartGenerationRef.current;
+    const seeds = shuffled(context).slice(0, SMART_SEEDS);
+    const known = new Set(context.map((track) => track.videoId));
+    smartBusyRef.current = true;
+    setSmartLoading(true);
+
+    void Promise.all(seeds.map((seed) => fetchRadio(seed.videoId, 15).catch(() => [])))
+      .then((lists) => {
+        if (generation !== smartGenerationRef.current) return;
+        const pool = smartPoolRef.current;
+        const taken = new Set([
+          ...known,
+          ...pool.map((track) => track.videoId),
+          ...smartPlayedRef.current,
+        ]);
+        // Se intercalan las radios para no encadenar un solo artista.
+        const fresh: YoutubeTrack[] = [];
+        const longest = Math.max(0, ...lists.map((list) => list.length));
+        for (let index = 0; index < longest; index += 1) {
+          for (const list of lists) {
+            const track = list[index];
+            if (track && !taken.has(track.videoId)) {
+              taken.add(track.videoId);
+              fresh.push(track);
+            }
+          }
+        }
+        smartPoolRef.current = [...pool, ...shuffled(fresh)];
+        refreshUpNext();
+      })
+      .finally(() => {
+        if (generation === smartGenerationRef.current) {
+          smartBusyRef.current = false;
+          setSmartLoading(false);
+        }
+      });
+  }, [refreshUpNext]);
+
+  const resetSmart = useCallback(() => {
+    smartGenerationRef.current += 1;
+    smartBusyRef.current = false;
+    smartPoolRef.current = [];
+    smartPlayedRef.current = new Set();
+    sinceSmartRef.current = 0;
+    setSmartLoading(false);
+  }, []);
+
+  /** Ordena la lista según el modo, con `first` al principio si se da. */
+  const buildOrder = useCallback((list: YoutubeTrack[], first?: YoutubeTrack) => {
+    if (shuffleRef.current === "off") {
+      orderRef.current = list;
+      posRef.current = first
+        ? list.findIndex((track) => track.videoId === first.videoId)
+        : -1;
+      return;
+    }
+    const rest = first
+      ? list.filter((track) => track.videoId !== first.videoId)
+      : list;
+    const inList = first && rest.length !== list.length;
+    orderRef.current = inList ? [first, ...shuffled(rest)] : shuffled(rest);
+    posRef.current = inList ? 0 : -1;
+  }, []);
+
+  /** Carga y reproduce una canción sin tocar la cola. */
+  const startTrack = useCallback(
+    async (track: YoutubeTrack) => {
       const request = ++requestRef.current;
+      const previous = currentRef.current;
+      if (previous && previous.videoId !== track.videoId) {
+        historyRef.current = [...historyRef.current.slice(-(HISTORY_LIMIT - 1)), previous];
+      }
 
       setError(null);
       setCurrent(track);
       currentRef.current = track;
+      setPlayed((list) => {
+        const next = [track, ...list.filter((item) => item.videoId !== track.videoId)].slice(
+          0,
+          PLAYED_LIMIT,
+        );
+        try {
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+        } catch {
+          // Sin almacenamiento, el historial dura hasta cerrar la app.
+        }
+        return next;
+      });
       setPosition(0);
       setDuration(track.durationSec || 0);
       setStatus("stopped");
       setLoading(true);
-
-      if (nextQueue) {
-        setQueue(nextQueue);
-        queueRef.current = nextQueue;
-      }
+      refreshUpNext();
 
       try {
         // Si la canción está descargada, se sirve desde el disco: así suena
@@ -271,32 +481,102 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
         if (request === requestRef.current) setLoading(false);
       }
     },
-    [getAudio],
+    [getAudio, refreshUpNext],
+  );
+
+  const playTrack = useCallback(
+    async (track: YoutubeTrack, nextQueue?: YoutubeTrack[]) => {
+      if (nextQueue) {
+        const sameContext =
+          nextQueue === contextRef.current ||
+          (nextQueue.length === contextRef.current.length &&
+            nextQueue.every(
+              (item, index) => item.videoId === contextRef.current[index]?.videoId,
+            ));
+        contextRef.current = nextQueue;
+        setQueue(nextQueue);
+        if (!sameContext) {
+          resetSmart();
+          buildOrder(nextQueue, track);
+          sinceSmartRef.current = 1;
+          loadSmart();
+        } else {
+          const index = orderRef.current.findIndex(
+            (item) => item.videoId === track.videoId,
+          );
+          if (index >= 0) posRef.current = index;
+          else buildOrder(nextQueue, track);
+        }
+      }
+      await startTrack(track);
+    },
+    [buildOrder, loadSmart, resetSmart, startTrack],
+  );
+
+  /** Reproduce una lista entera con el modo indicado (normal, mezcla o inteligente). */
+  const playCollection = useCallback(
+    (list: YoutubeTrack[], mode: ShuffleMode) => {
+      if (list.length === 0) return;
+      shuffleRef.current = mode;
+      setShuffleState(mode);
+      contextRef.current = list;
+      setQueue(list);
+      resetSmart();
+      buildOrder(list);
+      posRef.current = 0;
+      // La primera canción ya cuenta para las 3 antes de una recomendación.
+      sinceSmartRef.current = 1;
+      loadSmart();
+      void startTrack(orderRef.current[0]);
+    },
+    [buildOrder, loadSmart, resetSmart, startTrack],
   );
 
   const next = useCallback(() => {
-    const list = queueRef.current;
-    if (list.length === 0) return;
-
-    const currentId = currentRef.current?.videoId;
-    const index = list.findIndex((track) => track.videoId === currentId);
-    let followingIndex = index >= 0 ? (index + 1) % list.length : 0;
-    if (shuffleRef.current && list.length > 1) {
-      const offset = 1 + Math.floor(Math.random() * (list.length - 1));
-      followingIndex = (Math.max(index, 0) + offset) % list.length;
+    const manual = manualRef.current;
+    if (manual.length > 0) {
+      const [first, ...rest] = manual;
+      manualRef.current = rest;
+      void startTrack(first);
+      return;
     }
-    void playTrack(list[followingIndex]);
-  }, [playTrack]);
 
-  const toggleShuffle = useCallback(() => {
-    shuffleRef.current = !shuffleRef.current;
-    setShuffle(shuffleRef.current);
-  }, []);
+    const pool = smartPoolRef.current;
+    if (
+      shuffleRef.current === "smart" &&
+      sinceSmartRef.current >= SMART_EVERY &&
+      pool.length > 0
+    ) {
+      const [first, ...rest] = pool;
+      smartPoolRef.current = rest;
+      smartPlayedRef.current.add(first.videoId);
+      sinceSmartRef.current = 0;
+      if (rest.length < 2) loadSmart();
+      void startTrack(first);
+      return;
+    }
 
-  const toggleRepeat = useCallback(() => {
-    repeatRef.current = !repeatRef.current;
-    setRepeat(repeatRef.current);
-  }, []);
+    const order = orderRef.current;
+    if (order.length === 0) return;
+    let pos = posRef.current + 1;
+    if (pos >= order.length) {
+      // Al terminar la lista vuelve a empezar; en aleatorio, con otra mezcla.
+      if (shuffleRef.current !== "off") {
+        orderRef.current = shuffled(contextRef.current);
+      }
+      pos = 0;
+    }
+    posRef.current = pos;
+    sinceSmartRef.current += 1;
+    if (
+      shuffleRef.current === "smart" &&
+      sinceSmartRef.current >= SMART_EVERY &&
+      smartPoolRef.current.length === 0
+    ) {
+      loadSmart();
+    }
+    void startTrack(orderRef.current[pos]);
+  }, [loadSmart, startTrack]);
 
   useEffect(() => {
     nextRef.current = next;
@@ -310,24 +590,146 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
       return;
     }
 
-    const list = queueRef.current;
-    if (list.length === 0) return;
+    const history = historyRef.current;
+    const before = history[history.length - 1];
+    if (before) {
+      historyRef.current = history.slice(0, -1);
+      const index = orderRef.current.findIndex(
+        (item) => item.videoId === before.videoId,
+      );
+      if (index >= 0) posRef.current = index;
+      // Se quita la actual del historial para no volver a ella al retroceder.
+      currentRef.current = null;
+      void startTrack(before);
+      return;
+    }
 
-    const currentId = currentRef.current?.videoId;
-    const index = list.findIndex((track) => track.videoId === currentId);
-    const before = index > 0 ? list[index - 1] : list[list.length - 1];
-    void playTrack(before);
-  }, [playTrack]);
+    const order = orderRef.current;
+    if (order.length === 0) return;
+    const pos = posRef.current > 0 ? posRef.current - 1 : order.length - 1;
+    posRef.current = pos;
+    currentRef.current = null;
+    void startTrack(order[pos]);
+  }, [startTrack]);
+
+  const setShuffleMode = useCallback(
+    (mode: ShuffleMode) => {
+      if (shuffleRef.current === mode) return;
+      const wasSmart = shuffleRef.current === "smart";
+      shuffleRef.current = mode;
+      setShuffleState(mode);
+
+      const playing = currentRef.current;
+      const context = contextRef.current;
+      const inContext =
+        playing && context.some((track) => track.videoId === playing.videoId)
+          ? playing
+          : undefined;
+      buildOrder(context, inContext);
+
+      if (mode === "smart") {
+        resetSmart();
+        if (inContext) sinceSmartRef.current = 1;
+        loadSmart();
+      } else if (wasSmart) {
+        resetSmart();
+      }
+      refreshUpNext();
+    },
+    [buildOrder, loadSmart, refreshUpNext, resetSmart],
+  );
+
+  const cycleShuffle = useCallback(() => {
+    const order: ShuffleMode[] = ["off", "on", "smart"];
+    const index = order.indexOf(shuffleRef.current);
+    setShuffleMode(order[(index + 1) % order.length]);
+  }, [setShuffleMode]);
+
+  const toggleRepeat = useCallback(() => {
+    repeatRef.current = !repeatRef.current;
+    setRepeat(repeatRef.current);
+  }, []);
+
+  /** Si la persona añade una canción, deja de estar entre las recomendadas. */
+  const dropFromSmart = (videoId: string) => {
+    smartPoolRef.current = smartPoolRef.current.filter(
+      (item) => item.videoId !== videoId,
+    );
+  };
+
+  const addToQueue = useCallback(
+    (track: YoutubeTrack) => {
+      dropFromSmart(track.videoId);
+      manualRef.current = [...manualRef.current, track];
+      if (!currentRef.current) {
+        nextRef.current();
+        return;
+      }
+      refreshUpNext();
+    },
+    [refreshUpNext],
+  );
+
+  const playNext = useCallback(
+    (track: YoutubeTrack) => {
+      dropFromSmart(track.videoId);
+      manualRef.current = [track, ...manualRef.current];
+      if (!currentRef.current) {
+        nextRef.current();
+        return;
+      }
+      refreshUpNext();
+    },
+    [refreshUpNext],
+  );
+
+  const removeFromQueue = useCallback(
+    (item: QueueItem) => {
+      if (item.kind === "manual") {
+        manualRef.current = manualRef.current.filter((_, index) => index !== item.index);
+      } else if (item.kind === "smart") {
+        smartPoolRef.current = smartPoolRef.current.filter(
+          (_, index) => index !== item.index,
+        );
+      } else {
+        const order = [...orderRef.current];
+        order.splice(item.index, 1);
+        orderRef.current = order;
+        if (item.index < posRef.current) posRef.current -= 1;
+      }
+      refreshUpNext();
+    },
+    [refreshUpNext],
+  );
+
+  const jumpTo = useCallback(
+    (item: QueueItem) => {
+      if (item.kind === "manual") {
+        manualRef.current = manualRef.current.filter((_, index) => index !== item.index);
+      } else if (item.kind === "smart") {
+        smartPoolRef.current = smartPoolRef.current.filter(
+          (_, index) => index !== item.index,
+        );
+        smartPlayedRef.current.add(item.track.videoId);
+        sinceSmartRef.current = 0;
+      } else {
+        posRef.current = item.index;
+        sinceSmartRef.current += 1;
+      }
+      void startTrack(item.track);
+    },
+    [startTrack],
+  );
 
   const playPause = useCallback(() => {
     const audio = getAudio();
 
     if (!currentRef.current) {
-      const first = resultsRef.current[0] ?? queueRef.current[0];
+      const first = resultsRef.current[0] ?? contextRef.current[0];
       if (first) {
         void playTrack(
           first,
-          resultsRef.current.length > 0 ? resultsRef.current : queueRef.current,
+          resultsRef.current.length > 0 ? resultsRef.current : contextRef.current,
         );
       }
       return;
@@ -406,6 +808,18 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     [refreshDownloads],
   );
 
+  const setVolume = useCallback((value: number) => {
+    const clean = Math.min(1, Math.max(0, value));
+    volumeRef.current = clean;
+    setVolumeState(clean);
+    if (audioRef.current) audioRef.current.volume = clean;
+    try {
+      localStorage.setItem(VOLUME_KEY, String(clean));
+    } catch {
+      // Sin almacenamiento, el volumen dura hasta cerrar la app.
+    }
+  }, []);
+
   const seek = useCallback(
     (seconds: number) => {
       const audio = getAudio();
@@ -416,26 +830,75 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     [getAudio],
   );
 
-  const search = useCallback(async () => {
-    const text = query.trim();
-    if (!text) return;
-
+  const runSearch = useCallback(async (text: string, live: boolean) => {
+    const clean = text.trim();
+    if (!clean) return;
+    const request = ++searchRequestRef.current;
+    lastSearchedRef.current = clean.toLowerCase();
     setSearching(true);
     setError(null);
 
     try {
-      const tracks = await searchYoutubeMusic(text, 20);
+      const tracks = await searchYoutubeMusic(clean, 20);
+      if (request !== searchRequestRef.current) return;
       setResults(tracks);
       resultsRef.current = tracks;
-      if (tracks.length === 0) setError("Sin resultados para esa búsqueda");
+      if (tracks.length === 0 && !live) setError("Sin resultados para esa búsqueda");
     } catch (err) {
-      setError(describeError(err));
-      setResults([]);
-      resultsRef.current = [];
+      if (request !== searchRequestRef.current) return;
+      // Mientras se escribe no se muestran errores de palabras a medias.
+      if (!live) setError(describeError(err));
+      if (!live) {
+        setResults([]);
+        resultsRef.current = [];
+      }
     } finally {
-      setSearching(false);
+      if (request === searchRequestRef.current) setSearching(false);
     }
-  }, [query]);
+  }, []);
+
+  const search = useCallback(
+    async (text?: string) => {
+      const value = text ?? query;
+      if (text !== undefined) setQueryState(text);
+      setSuggestions(EMPTY_SUGGESTIONS);
+      await runSearch(value, false);
+    },
+    [query, runSearch],
+  );
+
+  // Mientras se escribe: sugerencias casi al instante y resultados al parar.
+  useEffect(() => {
+    const text = query.trim();
+    if (text.length < 2) {
+      setSuggestions(EMPTY_SUGGESTIONS);
+      return;
+    }
+    const controller = new AbortController();
+    const suggestTimer = window.setTimeout(() => {
+      suggestYoutubeMusic(text, controller.signal)
+        .then(setSuggestions)
+        .catch(() => {});
+    }, SUGGEST_DELAY_MS);
+    const searchTimer = window.setTimeout(() => {
+      if (text.toLowerCase() !== lastSearchedRef.current) {
+        void runSearch(text, true);
+      }
+    }, LIVE_SEARCH_DELAY_MS);
+    return () => {
+      controller.abort();
+      window.clearTimeout(suggestTimer);
+      window.clearTimeout(searchTimer);
+    };
+  }, [query, runSearch]);
+
+  const setQuery = useCallback((value: string) => {
+    setQueryState(value);
+    if (!value.trim()) {
+      lastSearchedRef.current = "";
+      setSuggestions(EMPTY_SUGGESTIONS);
+    }
+  }, []);
 
   const state = useMemo<MediaState>(() => {
     const connected = current !== null;
@@ -466,7 +929,9 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     positionSec: position,
     current,
     queue,
+    upNext,
     results,
+    suggestions,
     query,
     searching,
     loading,
@@ -476,20 +941,30 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     engine: bridge?.engine ?? null,
     likes,
     likesUpdatedAt,
+    played,
     downloads,
     downloadingId,
     downloadError,
-    shuffle,
+    shuffleMode,
+    smartLoading,
     repeat,
-    toggleShuffle,
+    cycleShuffle,
+    setShuffleMode,
     toggleRepeat,
     setQuery,
     search,
     playTrack,
+    playCollection,
+    addToQueue,
+    playNext,
+    removeFromQueue,
+    jumpTo,
     playPause,
     next,
     previous,
     seek,
+    volume,
+    setVolume,
     pause,
     toggleLike,
     addLikes,

@@ -1,6 +1,6 @@
 [package]
 name = "pocketpod"
-version = "0.4.0"
+version = "0.5.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
@@ -32,6 +32,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tower-http = { version = "0.6", features = ["cors"] }
 async-trait = "0.1"
+# Inicio de sesión con Google en Windows (PKCE).
+sha2 = "0.10"
+getrandom = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = ["Foundation", "Foundation_Collections", "Media", "Media_Control", "Storage_Streams", "System", "Data_Xml_Dom"] }

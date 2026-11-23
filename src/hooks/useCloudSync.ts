@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   cloudAvailable,
-  googleWebClientId,
+  googleClient,
   usesFirebaseEmulator,
 } from "../services/cloudConfig";
 import type { CloudUser } from "../services/cloudStore";
@@ -73,6 +73,7 @@ function describe(error: unknown): string {
   }
   const known: Array<[string, string]> = [
     ["google_cancelled", ""],
+    ["google_not_configured", "Esta versión no tiene configurado el inicio de sesión."],
     ["youtube_cancelled", ""],
     ["youtube_consent_required", "Vuelve a autorizar YouTube Music para actualizarla."],
     ["youtube_no_channel", "Tu cuenta de Google no tiene un canal de YouTube activo."],
@@ -84,7 +85,7 @@ function describe(error: unknown): string {
     ["cloud_busy", "Otro dispositivo está guardando. Se reintentará pronto."],
     ["cloud_too_large", "Tu biblioteca es demasiado grande para sincronizarla."],
     ["permission-denied", "La nube rechazó el acceso a estos datos."],
-    ["unavailable", "No hay conexión con la nube. Tus datos siguen en el teléfono."],
+    ["unavailable", "No hay conexión con la nube. Tus datos siguen en este dispositivo."],
     ["network-request-failed", "Revisa tu conexión a internet."],
     ["requires-recent-login", "Vuelve a confirmar tu cuenta para continuar."],
   ];
@@ -120,8 +121,10 @@ async function requestGoogleToken() {
     });
     return { idToken, rawNonce };
   }
+  const { clientId, clientSecret } = googleClient();
   const idToken = await invoke<string>("google_sign_in", {
-    clientId: googleWebClientId,
+    clientId,
+    clientSecret,
     nonce: await sha256(rawNonce),
   });
   return { idToken, rawNonce };
@@ -197,9 +200,12 @@ export function useCloudSync({
     setYoutubeBusy(true);
     setYoutubeMessage(null);
     try {
+      const { clientId, clientSecret } = googleClient();
       const library = await invoke<YoutubeLibrary>("youtube_library_fetch", {
         email: current.email,
         interactive,
+        clientId,
+        clientSecret,
       });
       latest.current.onYoutubeLibrary(library);
       writeValue(YOUTUBE_KEY, "1");

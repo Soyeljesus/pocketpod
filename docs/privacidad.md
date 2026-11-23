@@ -13,6 +13,8 @@ Responsable: [nombre o empresa]. Contacto: [correo de privacidad].
   sesión. Google y Firebase Authentication los procesan.
 - **Biblioteca:** playlists, canciones guardadas en ellas y Me gusta, para
   recuperarlos en tus dispositivos.
+- **Perfil, si lo cambias:** el nombre que escribas y la foto que elijas. La
+  foto se guarda recortada y pequeña, sin datos de ubicación ni de la cámara.
 - **YouTube Music, si lo conectas:** tus playlists y Me gusta de música, mediante
   un permiso de solo lectura. Lo importado pasa a formar parte de tu biblioteca.
 

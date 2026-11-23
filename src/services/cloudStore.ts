@@ -30,7 +30,17 @@ export interface CloudUser {
   uid: string;
   name: string;
   email: string;
+  photoUrl: string | null;
 }
+
+/** Perfil elegido por la persona. La foto es una imagen pequeña ya comprimida. */
+export interface CloudProfile {
+  name: string;
+  photo: string;
+  updatedAt: number;
+}
+
+const MAX_PROFILE_PHOTO_CHARS = 300_000;
 
 const app = getApps()[0] ?? initializeApp(firebaseConfig as Record<string, string>);
 const auth = initializeAuth(app, { persistence: indexedDBLocalPersistence });
@@ -46,7 +56,34 @@ function toCloudUser(user: User): CloudUser {
     uid: user.uid,
     name: user.displayName ?? "",
     email: user.email ?? "",
+    photoUrl: user.photoURL ?? null,
   };
+}
+
+function profileRef(uid: string) {
+  return doc(db, "users", uid, "profile", "main");
+}
+
+export async function readProfile(uid: string): Promise<CloudProfile | null> {
+  const snapshot = await getDocFromServer(profileRef(uid));
+  if (!snapshot.exists()) return null;
+  const data = snapshot.data();
+  return {
+    name: String(data.name ?? "").slice(0, 60),
+    photo: String(data.photo ?? ""),
+    updatedAt: Number(data.updatedAt ?? 0) || 0,
+  };
+}
+
+export async function writeProfile(uid: string, profile: CloudProfile) {
+  if (profile.photo.length > MAX_PROFILE_PHOTO_CHARS) throw new Error("cloud_too_large");
+  const batch = writeBatch(db);
+  batch.set(profileRef(uid), {
+    name: profile.name.slice(0, 60),
+    photo: profile.photo,
+    updatedAt: Math.round(profile.updatedAt),
+  });
+  await batch.commit();
 }
 
 function googleCredential(idToken: string, rawNonce: string) {
@@ -139,6 +176,7 @@ async function deleteLibrary(uid: string) {
   const chunks = await getDocsFromServer(chunksRef(uid));
   await commitInBatches([
     (batch) => batch.delete(metaRef(uid)),
+    (batch) => batch.delete(profileRef(uid)),
     ...chunks.docs.map(
       (item) => (batch: ReturnType<typeof writeBatch>) => batch.delete(item.ref),
     ),

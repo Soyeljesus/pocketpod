@@ -24,7 +24,7 @@ export interface QueueItem {
 
 /** Tarjeta de descubrimiento: playlist, álbum o canción de YouTube Music. */
 export interface DiscoverItem {
-  kind: "playlist" | "album" | "song";
+  kind: "playlist" | "album" | "song" | "artist";
   id: string;
   title: string;
   subtitle: string;
@@ -45,6 +45,7 @@ export interface DiscoverChip {
 export interface DiscoverPage {
   chips: DiscoverChip[];
   shelves: DiscoverShelf[];
+  header: { title: string; thumbnailUrl: string | null } | null;
 }
 
 export interface MoodItem {
@@ -62,7 +63,8 @@ export interface MoodGroup {
 /** Lo que se abre desde Inicio: una playlist pública o una categoría. */
 export type DiscoverTarget =
   | { kind: "remote"; id: string; title: string; subtitle: string; thumbnailUrl: string | null }
-  | { kind: "category"; browseId: string; params: string; title: string; color: string | null };
+  | { kind: "category"; browseId: string; params: string; title: string; color: string | null }
+  | { kind: "artist"; browseId: string; title: string; thumbnailUrl: string | null };
 
 /** Canción descargada para escuchar sin conexión. */
 export interface OfflineTrack extends YoutubeTrack {

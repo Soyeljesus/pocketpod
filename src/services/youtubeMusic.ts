@@ -136,7 +136,9 @@ function region(): string {
 
 function normalizeItem(raw: any): DiscoverItem | null {
   const kind = raw?.kind;
-  if (kind !== "playlist" && kind !== "album" && kind !== "song") return null;
+  if (kind !== "playlist" && kind !== "album" && kind !== "song" && kind !== "artist") {
+    return null;
+  }
   const id = String(raw?.id ?? "");
   if (!id) return null;
   return {
@@ -182,7 +184,25 @@ export async function fetchDiscover(
           .filter(Boolean) as DiscoverItem[],
       }))
       .filter((shelf: DiscoverShelf) => shelf.title && shelf.items.length > 0),
+    header: data?.header?.title
+      ? {
+          title: String(data.header.title),
+          thumbnailUrl:
+            typeof data.header.thumbnailUrl === "string" ? data.header.thumbnailUrl : null,
+        }
+      : null,
   };
+}
+
+/** Busca el álbum o el artista de una canción. */
+export async function lookupMusic(
+  kind: "album" | "artist",
+  query: string,
+): Promise<DiscoverItem> {
+  const data = await bridgeJson("/lookup", { kind, q: query });
+  const item = normalizeItem(data);
+  if (!item) throw new Error("No se encontró en YouTube Music");
+  return item;
 }
 
 export async function fetchMoods(): Promise<MoodGroup[]> {

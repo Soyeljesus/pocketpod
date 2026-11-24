@@ -27,6 +27,7 @@ export type IpodView =
   | "settings"
   | "remote"
   | "category"
+  | "artist"
   | "genres";
 
 export interface IpodDisplayProps {

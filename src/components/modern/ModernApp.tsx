@@ -21,7 +21,70 @@ import type {
   YoutubeTrack,
 } from "../../types/youtube";
 import type { UseDiscoverResult } from "../../hooks/useDiscover";
-import { fetchDiscover, fetchPlaylist } from "../../services/youtubeMusic";
+import { fetchDiscover, fetchPlaylist, lookupMusic } from "../../services/youtubeMusic";
+import type {
+  HTMLAttributes,
+  MouseEvent as ReactMouseEvent,
+  TouchEvent as ReactTouchEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
+
+const LONG_PRESS_MS = 480;
+
+/** Dejar presionado (o clic derecho en PC) abre el menú de la canción. */
+function useLongPress(onLong: () => void) {
+  const timer = useRef<number | null>(null);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+  const latest = useRef(onLong);
+  useEffect(() => {
+    latest.current = onLong;
+  });
+  const clear = () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = null;
+  };
+  const trigger = () => {
+    fired.current = true;
+    navigator.vibrate?.(12);
+    latest.current();
+  };
+  return {
+    onPointerDown: (event: ReactPointerEvent) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      fired.current = false;
+      start.current = { x: event.clientX, y: event.clientY };
+      clear();
+      timer.current = window.setTimeout(trigger, LONG_PRESS_MS);
+    },
+    onPointerMove: (event: ReactPointerEvent) => {
+      const origin = start.current;
+      if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10) clear();
+    },
+    onPointerUp: clear,
+    onPointerCancel: clear,
+    onPointerLeave: clear,
+    onContextMenu: (event: ReactMouseEvent) => {
+      event.preventDefault();
+      clear();
+      if (!fired.current) trigger();
+    },
+    onClickCapture: (event: ReactMouseEvent) => {
+      if (!fired.current) return;
+      fired.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+  };
+}
+
+function LongPressRow({
+  onLong,
+  ...rest
+}: HTMLAttributes<HTMLDivElement> & { onLong: () => void }) {
+  const handlers = useLongPress(onLong);
+  return <div {...rest} {...handlers} />;
+}
 import {
   formatDuration,
   formatSize,
@@ -258,9 +321,10 @@ const TrackList = memo(function TrackList({
         ].filter(Boolean);
 
         return (
-          <div
+          <LongPressRow
             key={track.videoId}
             className={`m-track ${current ? "current" : ""}`}
+            onLong={() => onMore(track)}
           >
             <button
               type="button"
@@ -309,7 +373,7 @@ const TrackList = memo(function TrackList({
                 <Icon name="more" />
               </button>
             )}
-          </div>
+          </LongPressRow>
         );
       })}
       {tracks.length > limit && (
@@ -362,29 +426,36 @@ function TrackCard({
   list: SharedListProps;
 }) {
   const current = track.videoId === list.currentVideoId;
+  const liked = list.likedIds.has(track.videoId);
+  const press = useLongPress(() => list.onMore(track));
   return (
-    <button
-      type="button"
-      className="m-shelf-item m-card"
-      onClick={() => (current ? app.onOpenNowPlaying() : app.onPlayTrack(track, queue))}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        list.onMore(track);
-      }}
-      aria-label={`Reproducir ${track.title} de ${track.artist}`}
-    >
-      <span className="m-card-art">
-        <PlayerArtwork url={track.thumbnailUrl} label="" />
-        <i className={current ? "on" : ""}>
-          <Icon name={current && list.playing ? "pause" : "play"} />
-        </i>
-      </span>
-      <strong>{track.title}</strong>
-      <small>
-        {list.likedIds.has(track.videoId) && <Icon name="heartFilled" />}
-        {track.artist}
-      </small>
-    </button>
+    <div className="m-shelf-item m-card">
+      <button
+        type="button"
+        className="m-card-main"
+        onClick={() => (current ? app.onOpenNowPlaying() : app.onPlayTrack(track, queue))}
+        aria-label={`Reproducir ${track.title} de ${track.artist}`}
+        {...press}
+      >
+        <span className="m-card-art">
+          <PlayerArtwork url={track.thumbnailUrl} label="" />
+          <i className={current ? "on" : ""}>
+            <Icon name={current && list.playing ? "pause" : "play"} />
+          </i>
+        </span>
+        <strong>{track.title}</strong>
+        <small>{track.artist}</small>
+      </button>
+      <button
+        type="button"
+        className={`m-card-like ${liked ? "on" : ""}`}
+        onClick={() => list.onToggleLike(track)}
+        aria-pressed={liked}
+        aria-label={liked ? "Quitar de Me gusta" : "Añadir a Me gusta"}
+      >
+        <Icon name={liked ? "heartFilled" : "heart"} />
+      </button>
+    </div>
   );
 }
 
@@ -405,15 +476,19 @@ function DiscoverCard({
   return (
     <button
       type="button"
-      className="m-shelf-item m-card"
+      className={`m-shelf-item m-card ${item.kind === "artist" ? "m-card-artist" : ""}`}
       onClick={() =>
-        app.onOpenTarget({
-          kind: "remote",
-          id: item.id,
-          title: item.title,
-          subtitle: item.subtitle,
-          thumbnailUrl: item.thumbnailUrl,
-        })
+        app.onOpenTarget(
+          item.kind === "artist"
+            ? { kind: "artist", browseId: item.id, title: item.title, thumbnailUrl: item.thumbnailUrl }
+            : {
+                kind: "remote",
+                id: item.id,
+                title: item.title,
+                subtitle: item.subtitle,
+                thumbnailUrl: item.thumbnailUrl,
+              },
+        )
       }
     >
       <span className="m-card-art">
@@ -469,7 +544,11 @@ function PicksGrid({ tracks, list }: { tracks: YoutubeTrack[]; list: SharedListP
         const current = track.videoId === list.currentVideoId;
         const liked = list.likedIds.has(track.videoId);
         return (
-          <div className={`m-track m-pick ${current ? "current" : ""}`} key={track.videoId}>
+          <LongPressRow
+            className={`m-track m-pick ${current ? "current" : ""}`}
+            key={track.videoId}
+            onLong={() => list.onMore(track)}
+          >
             <button
               type="button"
               className="m-track-main"
@@ -481,11 +560,17 @@ function PicksGrid({ tracks, list }: { tracks: YoutubeTrack[]; list: SharedListP
               </span>
               <span className="m-track-text">
                 <strong>{track.title}</strong>
-                <small>
-                  {liked && <Icon name="heartFilled" />}
-                  {track.artist}
-                </small>
+                <small>{track.artist}</small>
               </span>
+            </button>
+            <button
+              type="button"
+              className={`m-icon-btn ${liked ? "accent" : ""}`}
+              onClick={() => list.onToggleLike(track)}
+              aria-pressed={liked}
+              aria-label={liked ? "Quitar de Me gusta" : "Añadir a Me gusta"}
+            >
+              <Icon name={liked ? "heartFilled" : "heart"} />
             </button>
             <button
               type="button"
@@ -495,7 +580,7 @@ function PicksGrid({ tracks, list }: { tracks: YoutubeTrack[]; list: SharedListP
             >
               <Icon name="more" />
             </button>
-          </div>
+          </LongPressRow>
         );
       })}
     </div>
@@ -830,6 +915,69 @@ function CategoryScreen({
       >
         <h1 className="m-title">{target.title}</h1>
       </div>
+      {error && <p className="m-error">{error}</p>}
+      {!page && !error && <p className="m-empty">Cargando…</p>}
+      {page && <Shelves shelves={page.shelves} app={app} list={list} />}
+    </>
+  );
+}
+
+const artistCache = new Map<string, Promise<DiscoverPage>>();
+
+/** Página de un artista: canciones más escuchadas, álbumes, singles y parecidos. */
+function ArtistScreen({
+  target,
+  app,
+  list,
+}: ScreenProps & { target: Extract<DiscoverTarget, { kind: "artist" }> }) {
+  const [page, setPage] = useState<DiscoverPage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let found = artistCache.get(target.browseId);
+    if (!found) {
+      found = fetchDiscover({ browseId: target.browseId });
+      found.catch(() => artistCache.delete(target.browseId));
+      artistCache.set(target.browseId, found);
+    }
+    setPage(null);
+    setError(null);
+    found
+      .then((next) => {
+        if (active) setPage(next);
+      })
+      .catch(() => {
+        if (active) setError("No se pudo cargar el artista. Revisa tu conexión.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [target.browseId]);
+
+  const songs = useMemo(() => {
+    const seen = new Set<string>();
+    return (page?.shelves ?? [])
+      .flatMap((shelf) => shelf.items)
+      .map((item) => item.track)
+      .filter((track): track is YoutubeTrack => {
+        if (!track || seen.has(track.videoId)) return false;
+        seen.add(track.videoId);
+        return true;
+      });
+  }, [page]);
+  const photo = page?.header?.thumbnailUrl ?? target.thumbnailUrl;
+
+  return (
+    <>
+      <div className="m-hero m-artist-hero">
+        <PlayerArtwork key={photo} url={photo} label="" />
+      </div>
+      <div className="m-hero-copy">
+        <h1>{page?.header?.title ?? target.title}</h1>
+        {songs.length > 0 && <p>{songs.length} canciones para empezar</p>}
+      </div>
+      {songs.length > 0 && <CollectionActions tracks={songs} app={app} />}
       {error && <p className="m-error">{error}</p>}
       {!page && !error && <p className="m-empty">Cargando…</p>}
       {page && <Shelves shelves={page.shelves} app={app} list={list} />}
@@ -1188,6 +1336,12 @@ function PlaylistScreen({
   );
 }
 
+/** Primer artista de un crédito como "A, B & C". */
+function mainArtistName(artist: string): string {
+  return artist.split(/,|&| y | x | feat\.? | ft\.? /i)[0]?.trim() || artist;
+}
+
+/** Menú de una canción: se abre con los 3 puntos o dejándola presionada. */
 function TrackOptions({
   track,
   app,
@@ -1199,24 +1353,71 @@ function TrackOptions({
   playlist: SavedPlaylist | null;
   onClose: () => void;
 }) {
-  const downloaded = app.ytDownloads.some(
-    (item) => item.videoId === track.videoId,
-  );
+  const [finding, setFinding] = useState<"album" | "artist" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const downloaded = app.ytDownloads.some((item) => item.videoId === track.videoId);
+  const downloading = app.ytDownloadingId === track.videoId;
+  const liked = app.ytLikes.some((item) => item.videoId === track.videoId);
   const run = (action: () => void) => {
     action();
     onClose();
   };
 
+  const open = (kind: "album" | "artist") => {
+    setFinding(kind);
+    setError(null);
+    const artist = mainArtistName(track.artist);
+    const query =
+      kind === "artist"
+        ? artist
+        : `${track.album && track.album !== "YouTube Music" ? track.album : track.title} ${artist}`;
+    lookupMusic(kind, query)
+      .then((item) => {
+        onClose();
+        app.onOpenTarget(
+          kind === "artist"
+            ? { kind: "artist", browseId: item.id, title: item.title, thumbnailUrl: item.thumbnailUrl }
+            : {
+                kind: "remote",
+                id: item.id,
+                title: item.title,
+                subtitle: item.subtitle,
+                thumbnailUrl: item.thumbnailUrl,
+              },
+        );
+      })
+      .catch(() => setError(kind === "artist" ? "No se encontró el artista." : "No se encontró el álbum."))
+      .finally(() => setFinding(null));
+  };
+
+  const options: Array<[IconName, string, () => void, boolean?]> = [
+    [liked ? "heartFilled" : "heart", liked ? "Quitar de Me gusta" : "Me gusta", () => run(() => app.onToggleLike(track))],
+    ["playNext", "Reproducir siguiente", () => run(() => app.onPlayNext(track))],
+    ["queue", "Añadir a la cola", () => run(() => app.onAddToQueue(track))],
+    ["plus", "Añadir a una playlist", () => run(() => app.onAddToPlaylist(track))],
+    [
+      downloaded ? "trash" : "download",
+      downloaded ? "Eliminar descarga" : downloading ? "Descargando…" : "Descargar",
+      () => run(() => (downloaded ? app.onRemoveDownload(track.videoId) : app.onDownload(track))),
+      downloading,
+    ],
+    ["library", finding === "album" ? "Buscando el álbum…" : "Ver álbum", () => open("album"), finding !== null],
+    ["user", finding === "artist" ? "Buscando el artista…" : "Ver artista", () => open("artist"), finding !== null],
+  ];
+
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <section
-        className="sheet"
+        className="sheet m-track-sheet"
         role="dialog"
         aria-modal="true"
         aria-label={`Opciones de ${track.title}`}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="sheet-header">
+        <header className="sheet-header m-track-sheet-head">
+          <span className="m-track-art">
+            <Artwork url={track.thumbnailUrl} />
+          </span>
           <div>
             <strong>{track.title}</strong>
             <small>{track.artist}</small>
@@ -1225,35 +1426,26 @@ function TrackOptions({
             Cerrar
           </button>
         </header>
-        <div className="sheet-list">
-          <button type="button" onClick={() => run(() => app.onPlayNext(track))}>
-            <span>Reproducir a continuación</span>
-          </button>
-          <button type="button" onClick={() => run(() => app.onAddToQueue(track))}>
-            <span>Añadir a la cola</span>
-          </button>
-          <button type="button" onClick={() => run(() => app.onAddToPlaylist(track))}>
-            <span>Añadir a una playlist</span>
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              run(() =>
-                downloaded
-                  ? app.onRemoveDownload(track.videoId)
-                  : app.onDownload(track),
-              )
-            }
-          >
-            <span>{downloaded ? "Eliminar descarga" : "Descargar"}</span>
-          </button>
+        {error && <p className="m-error">{error}</p>}
+        <div className="sheet-list m-option-list">
+          {options.map(([icon, label, action, disabled]) => (
+            <button
+              type="button"
+              key={label}
+              disabled={disabled}
+              onClick={action}
+              className={icon === "heartFilled" ? "liked" : ""}
+            >
+              <Icon name={icon} />
+              <span>{label}</span>
+            </button>
+          ))}
           {playlist?.tracks.some((item) => item.videoId === track.videoId) && (
             <button
               type="button"
-              onClick={() =>
-                run(() => app.onRemoveFromPlaylist(playlist.id, track.videoId))
-              }
+              onClick={() => run(() => app.onRemoveFromPlaylist(playlist.id, track.videoId))}
             >
+              <Icon name="close" />
               <span>Quitar de esta playlist</span>
             </button>
           )}
@@ -1564,6 +1756,69 @@ function MiniPlayer({ app }: { app: ModernAppProps }) {
   );
 }
 
+
+/**
+ * Deslizar de izquierda a derecha vuelve a la pantalla anterior. No se activa
+ * dentro de filas que se desplazan de lado ni en barras de progreso.
+ */
+function useSwipeBack(enabled: boolean, onBack: () => void) {
+  const start = useRef<{ x: number; y: number; at: number } | null>(null);
+  const [offset, setOffset] = useState(0);
+  const latest = useRef(onBack);
+  useEffect(() => {
+    latest.current = onBack;
+  });
+
+  const blocked = (target: EventTarget | null) =>
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        ".m-shelf, .m-picks, .m-chips, .m-chips-scroll, input, .track-progress, .m-volume",
+      ),
+    );
+
+  return {
+    offset,
+    handlers: enabled
+      ? {
+          onTouchStart: (event: ReactTouchEvent) => {
+            const touch = event.touches[0];
+            start.current =
+              event.touches.length === 1 && !blocked(event.target)
+                ? { x: touch.clientX, y: touch.clientY, at: Date.now() }
+                : null;
+          },
+          onTouchMove: (event: ReactTouchEvent) => {
+            const origin = start.current;
+            if (!origin) return;
+            const touch = event.touches[0];
+            const dx = touch.clientX - origin.x;
+            const dy = Math.abs(touch.clientY - origin.y);
+            if (dy > 40 && dy > dx) {
+              start.current = null;
+              setOffset(0);
+              return;
+            }
+            setOffset(dx > 0 ? Math.min(dx * 0.35, 90) : 0);
+          },
+          onTouchEnd: (event: ReactTouchEvent) => {
+            const origin = start.current;
+            start.current = null;
+            setOffset(0);
+            if (!origin) return;
+            const touch = event.changedTouches[0];
+            const dx = touch.clientX - origin.x;
+            const dy = Math.abs(touch.clientY - origin.y);
+            if (dx > 90 && dy < 70 && Date.now() - origin.at < 700) latest.current();
+          },
+          onTouchCancel: () => {
+            start.current = null;
+            setOffset(0);
+          },
+        }
+      : {},
+  };
+}
 
 function useDesktopLayout(): boolean {
   const query = "(min-width: 860px)";
@@ -1878,14 +2133,22 @@ export function ModernApp(props: ModernAppProps) {
   // En PC el perfil vive en el panel derecho.
   if (desktop && screen === "settings") screen = "menu";
   const target = props.discoverTarget;
-  if ((screen === "remote" && target?.kind !== "remote") || (screen === "category" && target?.kind !== "category")) {
+  if (
+    (screen === "remote" && target?.kind !== "remote") ||
+    (screen === "category" && target?.kind !== "category") ||
+    (screen === "artist" && target?.kind !== "artist")
+  ) {
     screen = "menu";
   }
-  const heroScreen = screen === "playlist" || screen === "remote";
+  const heroScreen = screen === "playlist" || screen === "remote" || screen === "artist";
   const backScreen = heroScreen || screen === "settings" || screen === "category" || screen === "genres";
 
   const activeTab =
-    screen === "menu" || screen === "nowPlaying" || screen === "remote" || screen === "category"
+    screen === "menu" ||
+    screen === "nowPlaying" ||
+    screen === "remote" ||
+    screen === "category" ||
+    screen === "artist"
       ? "menu"
       : screen === "genres"
         ? desktop
@@ -1899,7 +2162,13 @@ export function ModernApp(props: ModernAppProps) {
               ? screen
               : "library";
   const screenKey = `${screen}-${props.selectedPlaylist?.id ?? ""}-${
-    target?.kind === "remote" ? target.id : target?.kind === "category" ? target.params : ""
+    target?.kind === "remote"
+      ? target.id
+      : target?.kind === "category"
+        ? target.params
+        : target?.kind === "artist"
+          ? target.browseId
+          : ""
   }`;
 
   const tabs: Array<[string, string, IconName, () => void]> = [
@@ -1907,6 +2176,9 @@ export function ModernApp(props: ModernAppProps) {
     ["search", "Buscar", "search", props.onOpenSearch],
     ["library", "Biblioteca", "library", props.onOpenPlaylists],
   ];
+
+  // En el inicio no hay "atrás": deslizar ahí no hace nada.
+  const swipe = useSwipeBack(!desktop && screen !== "menu", props.onBack);
 
   const openProfile = (section: ProfileSection) => {
     setProfileSection(section);
@@ -1958,6 +2230,8 @@ export function ModernApp(props: ModernAppProps) {
       <RemoteScreen app={props} list={list} target={target} />
     ) : screen === "category" && target?.kind === "category" ? (
       <CategoryScreen app={props} list={list} target={target} />
+    ) : screen === "artist" && target?.kind === "artist" ? (
+      <ArtistScreen app={props} list={list} target={target} />
     ) : screen === "genres" ? (
       <GenresScreen app={props} />
     ) : (
@@ -2072,7 +2346,16 @@ export function ModernApp(props: ModernAppProps) {
         {!IS_ANDROID && <WindowControls />}
       </header>
 
-      <main className="m-main" key={screenKey}>
+      <main
+        className="m-main"
+        key={screenKey}
+        {...swipe.handlers}
+        style={
+          swipe.offset > 0
+            ? { transform: `translateX(${swipe.offset}px)`, opacity: 1 - swipe.offset / 300 }
+            : undefined
+        }
+      >
         {content}
       </main>
 

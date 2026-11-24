@@ -145,6 +145,16 @@ function App() {
   const [browseView, setBrowseView] = useState<IpodView>("menu");
   const [playlistId, setPlaylistId] = useState<string | null>(null);
   const [discoverTarget, setDiscoverTarget] = useState<DiscoverTarget | null>(null);
+  const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
+
+  /** Aviso corto abajo de la pantalla. */
+  const notify = (text: string) => setToast({ id: Date.now(), text });
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2400);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
   const [trackToAdd, setTrackToAdd] = useState<YoutubeTrack | null>(null);
   const [optionsTrack, setOptionsTrack] = useState<YoutubeTrack | null>(null);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -515,7 +525,10 @@ function App() {
   const createPlaylistWithTrack = (name: string) => {
     if (!trackToAdd) return;
     const id = playlistStore.create(name);
-    if (id) playlistStore.addTrack(id, trackToAdd);
+    if (id) {
+      playlistStore.addTrack(id, trackToAdd);
+      notify(`Se creó «${name.trim()}» con la canción`);
+    }
     setTrackToAdd(null);
   };
 
@@ -625,8 +638,14 @@ function App() {
               if (systemPlaying) void system.playPause();
               youtube.playCollection(tracks, mode);
             }}
-            onAddToQueue={youtube.addToQueue}
-            onPlayNext={youtube.playNext}
+            onAddToQueue={(track) => {
+              youtube.addToQueue(track);
+              notify(`«${track.title}» se añadió a la cola`);
+            }}
+            onPlayNext={(track) => {
+              youtube.playNext(track);
+              notify(`«${track.title}» suena después de esta`);
+            }}
             onRemoveFromQueue={youtube.removeFromQueue}
             onJumpTo={youtube.jumpTo}
             onSearchText={(text) => void youtube.search(text)}
@@ -645,11 +664,12 @@ function App() {
             discoverTarget={discoverTarget}
             ytPlayed={youtube.played}
             onOpenTarget={(target) =>
-              goTo(target.kind === "remote" ? "remote" : "category", playlistId, target)
+              goTo(target.kind, playlistId, target)
             }
             onOpenGenres={() => goTo("genres")}
             onSaveRemote={(playlist, title) => {
               playlistStore.saveImported(playlist, title);
+              notify(`«${title}» se guardó en tu biblioteca`);
             }}
           />
         ) : (
@@ -680,11 +700,18 @@ function App() {
             playlists={playlistStore.playlists}
             onAdd={(id) => {
               playlistStore.addTrack(id, trackToAdd);
+              const name = playlistStore.playlists.find((item) => item.id === id)?.title;
+              notify(name ? `Se añadió a «${name}»` : "Se añadió a la playlist");
               setTrackToAdd(null);
             }}
             onCreate={createPlaylistWithTrack}
             onClose={() => setTrackToAdd(null)}
           />
+        )}
+        {toast && (
+          <div className="m-toast" role="status" key={toast.id}>
+            {toast.text}
+          </div>
         )}
         {updates.prompt && design === "ipod" && (
           <UpdatePrompt

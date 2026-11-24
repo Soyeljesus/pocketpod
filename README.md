@@ -15,6 +15,9 @@ El nombre viene de **F** de *free* y **Y** de *YouTube*, y suena como *for you*.
 - **Inicio para descubrir música**: estados de ánimo (Triste, Relax, Fiesta…), listas de la comunidad más escuchadas, géneros y álbumes de YouTube Music. Puedes abrir cualquier lista, reproducirla y guardarla en tu biblioteca.
 - **Mezclas personales**: «Selecciones», «Sigue escuchando» y «Similares a» tu artista favorito, armadas con tus Me gusta y lo que escuchaste. Se calculan en tu dispositivo.
 - **Explorar**: todos los géneros y estados de ánimo.
+- **Mantén presionada una canción** para ver Me gusta, Reproducir siguiente, Añadir a la cola, Descargar, Ver álbum y Ver artista. Cada artista tiene su página con canciones, álbumes y artistas parecidos.
+- **Avisos** al añadir a la cola o a una playlist, y **corazón** directo en Selecciones y en las tarjetas.
+- **Desliza de izquierda a derecha** para volver a la pantalla anterior.
 - **Menú de cuenta**: al tocar tu foto aparecen Cuenta, Configuración y Sobre FoYu.
 - **Búsqueda mientras escribes**: sugerencias y canciones aparecen sin pulsar Buscar.
 - **Me gusta** y descargas para escuchar sin conexión.
@@ -179,8 +182,8 @@ En **GitHub → Settings → Secrets and variables → Actions** configura:
 Después crea un tag con la versión de `package.json`:
 
 ```bash
-git tag -a v0.5.0 -m "FoYu 0.5.0"
-git push origin v0.5.0
+git tag -a v0.5.1 -m "FoYu 0.5.1"
+git push origin v0.5.1
 ```
 
 El workflow crea un borrador con los instaladores de Windows y la APK de Android. Revísalo y publícalo desde GitHub.

@@ -37,11 +37,19 @@ pub struct DiscoverChip {
     pub params: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageHeader {
+    pub title: String,
+    pub thumbnail_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoverPage {
     pub chips: Vec<DiscoverChip>,
     pub shelves: Vec<DiscoverShelf>,
+    pub header: Option<PageHeader>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,6 +181,7 @@ fn parse_two_row(item: &Value) -> Option<DiscoverItem> {
     let browse_id = browse.get("browseId").and_then(Value::as_str).unwrap_or_default();
 
     let (kind, id) = match page_type {
+        "MUSIC_PAGE_TYPE_ARTIST" => ("artist", browse_id.to_string()),
         "MUSIC_PAGE_TYPE_PLAYLIST" => ("playlist", browse_id.strip_prefix("VL").unwrap_or(browse_id).to_string()),
         "MUSIC_PAGE_TYPE_ALBUM" => {
             // El álbum se reproduce por su lista de audio (OLAK5uy_...).
@@ -212,7 +221,8 @@ fn parse_shelf(shelf: &Value) -> Option<DiscoverShelf> {
     let title = runs_text(
         shelf
             .pointer("/header/musicCarouselShelfBasicHeaderRenderer/title")
-            .or_else(|| shelf.pointer("/header/gridHeaderRenderer/title")),
+            .or_else(|| shelf.pointer("/header/gridHeaderRenderer/title"))
+            .or_else(|| shelf.get("title")),
     );
     let entries = shelf
         .get("contents")
@@ -245,12 +255,26 @@ fn parse_shelf(shelf: &Value) -> Option<DiscoverShelf> {
 
 /// Estantes de una página de YouTube Music (inicio o categoría).
 pub fn parse_page(value: &Value) -> DiscoverPage {
+    // En orden de aparición: en la página de un artista las canciones van primero.
     let mut shelves = Vec::new();
-    for key in ["musicCarouselShelfRenderer", "gridRenderer"] {
-        let mut found = Vec::new();
-        collect(value, key, &mut found);
-        shelves.extend(found.into_iter().filter_map(parse_shelf));
-    }
+    let mut found = Vec::new();
+    collect_any(
+        value,
+        &["musicShelfRenderer", "musicCarouselShelfRenderer", "gridRenderer"],
+        &mut found,
+    );
+    shelves.extend(found.into_iter().filter_map(parse_shelf));
+
+    let header = ["musicImmersiveHeaderRenderer", "musicVisualHeaderRenderer"]
+        .iter()
+        .find_map(|key| value.get("header")?.get(*key))
+        .and_then(|header| {
+            let title = runs_text(header.get("title"));
+            (!title.is_empty()).then(|| PageHeader {
+                title,
+                thumbnail_url: last_thumbnail(header),
+            })
+        });
 
     let mut chips = Vec::new();
     let mut found = Vec::new();
@@ -271,7 +295,64 @@ pub fn parse_page(value: &Value) -> DiscoverPage {
         });
     }
 
-    DiscoverPage { chips, shelves }
+    DiscoverPage { chips, shelves, header }
+}
+
+fn collect_any<'a>(value: &'a Value, keys: &[&str], out: &mut Vec<&'a Value>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(item) = keys.iter().find_map(|key| map.get(*key)) {
+                out.push(item);
+                return;
+            }
+            for child in map.values() {
+                collect_any(child, keys, out);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_any(child, keys, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Primer álbum o artista de una búsqueda filtrada.
+pub fn parse_lookup(value: &Value, kind: &str) -> Option<DiscoverItem> {
+    let mut rows = Vec::new();
+    collect(value, "musicResponsiveListItemRenderer", &mut rows);
+    rows.into_iter().find_map(|row| {
+        let browse = row.pointer("/navigationEndpoint/browseEndpoint")?;
+        let page_type = browse
+            .pointer("/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType")
+            .and_then(Value::as_str)?;
+        let column = |index: usize| {
+            runs_text(row.pointer(&format!(
+                "/flexColumns/{index}/musicResponsiveListItemFlexColumnRenderer/text"
+            )))
+        };
+        let title = column(0);
+        if title.is_empty() {
+            return None;
+        }
+        let id = match (kind, page_type) {
+            ("artist", "MUSIC_PAGE_TYPE_ARTIST") => browse.get("browseId")?.as_str()?.to_string(),
+            ("album", "MUSIC_PAGE_TYPE_ALBUM") => first_key(row, "watchPlaylistEndpoint")?
+                .get("playlistId")?
+                .as_str()?
+                .to_string(),
+            _ => return None,
+        };
+        valid_id(&id).then(|| DiscoverItem {
+            kind: kind.to_string(),
+            id,
+            title,
+            subtitle: clean_subtitle(&column(1)),
+            thumbnail_url: last_thumbnail(row),
+            track: None,
+        })
+    })
 }
 
 /// Estados de ánimo y géneros.
@@ -360,6 +441,39 @@ mod tests {
         assert_eq!(items[0].id, "PLabcdef12345");
         assert_eq!(items[0].kind, "playlist");
         assert_eq!(items[0].thumbnail_url.as_deref(), Some("https://yt3.ggpht.com/a=s576"));
+    }
+
+    #[test]
+    fn finds_album_playlist_and_artist_page() {
+        let row = |page: &str, browse: &str, title: &str, play: Option<&str>| {
+            let mut item = json!({ "musicResponsiveListItemRenderer": {
+                "flexColumns": [
+                    { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": title }] } } },
+                    { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [
+                        { "text": "Álbum" }, { "text": " • " }, { "text": "Wisin & Yandel" }] } } }
+                ],
+                "navigationEndpoint": { "browseEndpoint": {
+                    "browseId": browse,
+                    "browseEndpointContextSupportedConfigs": { "browseEndpointContextMusicConfig": { "pageType": page } }
+                }}
+            }});
+            if let Some(list) = play {
+                item["musicResponsiveListItemRenderer"]["overlay"] =
+                    json!({ "watchPlaylistEndpoint": { "playlistId": list } });
+            }
+            item
+        };
+        let albums = json!({ "contents": [
+            row("MUSIC_PAGE_TYPE_ALBUM", "MPREb_abc", "Pa'l Mundo", Some("OLAK5uy_abcdefgh"))
+        ]});
+        let album = parse_lookup(&albums, "album").unwrap();
+        assert_eq!(album.id, "OLAK5uy_abcdefgh");
+        assert_eq!(album.subtitle, "Wisin & Yandel");
+        let artists = json!({ "contents": [
+            row("MUSIC_PAGE_TYPE_ARTIST", "UCJ0-R-v3CaJNYMqfp9tivqA", "Wisin & Yandel", None)
+        ]});
+        assert_eq!(parse_lookup(&artists, "artist").unwrap().id, "UCJ0-R-v3CaJNYMqfp9tivqA");
+        assert!(parse_lookup(&artists, "album").is_none());
     }
 
     #[test]

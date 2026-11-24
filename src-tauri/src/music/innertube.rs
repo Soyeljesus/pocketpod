@@ -259,6 +259,14 @@ impl MusicEngine for InnerTube {
         Ok(parse_suggestions(&value))
     }
 
+    async fn search_raw(&self, query: &str, params: &str) -> Result<Value, String> {
+        self.post_music(
+            "search",
+            json!({ "context": { "client": self.music_client() }, "query": query, "params": params }),
+        )
+        .await
+    }
+
     async fn browse_page(
         &self,
         browse_id: &str,

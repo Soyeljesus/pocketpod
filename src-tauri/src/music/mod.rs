@@ -125,6 +125,11 @@ pub trait MusicEngine: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Búsqueda con filtro (álbumes, artistas) sin interpretar.
+    async fn search_raw(&self, _query: &str, _params: &str) -> Result<serde_json::Value, String> {
+        Err("No disponible".to_string())
+    }
+
     /// Página de YouTube Music ya leída (inicio, ánimos y géneros, una categoría).
     async fn browse_page(
         &self,

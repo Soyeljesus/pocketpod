@@ -352,6 +352,7 @@ fn router(state: AppState) -> Router {
         .route("/radio/{video_id}", get(radio))
         .route("/discover", get(discover))
         .route("/moods", get(moods))
+        .route("/lookup", get(lookup))
         .route(
             "/library/export",
             post(export_library).layer(DefaultBodyLimit::max(MAX_LIBRARY_BYTES)),
@@ -493,7 +494,13 @@ async fn discover(
     }
     let region = clean_region(params.gl.as_deref());
     let browse_id = params.id.as_deref().unwrap_or("FEmusic_home");
-    if !matches!(browse_id, "FEmusic_home" | "FEmusic_moods_and_genres_category") {
+    // Inicio, una categoría o la página de un artista (UC...).
+    let artist = browse_id.len() == 24
+        && browse_id.starts_with("UC")
+        && browse_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !artist && !matches!(browse_id, "FEmusic_home" | "FEmusic_moods_and_genres_category") {
         return error(StatusCode::BAD_REQUEST, "Página no válida");
     }
     let page_params = clean_params(params.params.as_deref());
@@ -502,6 +509,41 @@ async fn discover(
     }
     match state.discover_page(browse_id, page_params, &region).await {
         Ok(value) => Json(super::discover::parse_page(&value)).into_response(),
+        Err(err) => error(StatusCode::BAD_GATEWAY, err),
+    }
+}
+
+#[derive(Deserialize)]
+struct LookupParams {
+    kind: Option<String>,
+    q: Option<String>,
+    t: Option<String>,
+}
+
+/// Busca el álbum o el artista de una canción para abrir su página.
+async fn lookup(
+    State(state): State<AppState>,
+    Query(params): Query<LookupParams>,
+    headers: HeaderMap,
+) -> Response {
+    if !state.authorized(&headers, params.t.as_deref()) {
+        return error(StatusCode::UNAUTHORIZED, "Token inválido");
+    }
+    let kind = params.kind.as_deref().unwrap_or_default();
+    let filter = match kind {
+        "album" => "EgWKAQIYAWoMEA4QChADEAQQCRAF",
+        "artist" => "EgWKAQIgAWoMEA4QChADEAQQCRAF",
+        _ => return error(StatusCode::BAD_REQUEST, "Tipo no válido"),
+    };
+    let query = params.q.unwrap_or_default().trim().to_string();
+    if query.is_empty() || query.chars().count() > 200 {
+        return error(StatusCode::BAD_REQUEST, "Búsqueda no válida");
+    }
+    match state.engine.search_raw(&query, filter).await {
+        Ok(value) => match super::discover::parse_lookup(&value, kind) {
+            Some(item) => Json(item).into_response(),
+            None => error(StatusCode::NOT_FOUND, "No se encontró en YouTube Music"),
+        },
         Err(err) => error(StatusCode::BAD_GATEWAY, err),
     }
 }

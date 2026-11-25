@@ -13,7 +13,11 @@ export interface ProfileSettings {
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;
   updates: UseUpdateCheckResult;
+  crossfade: number;
+  onCrossfadeChange: (seconds: number) => void;
 }
+
+const CROSSFADES = [0, 3, 6, 9, 12];
 
 export function Avatar({
   photo,
@@ -264,6 +268,24 @@ export function ProfilePanel({
               onClick={() => settings.onThemeChange(id)}
             >
               {label}
+            </button>
+          ))}
+        </div>
+        <h3>Crossfade</h3>
+        <p className="m-hint">
+          La siguiente canción empieza mientras la actual se apaga.
+        </p>
+        <div className="m-segmented m-segmented-5" role="radiogroup" aria-label="Crossfade">
+          {CROSSFADES.map((seconds) => (
+            <button
+              type="button"
+              role="radio"
+              key={seconds}
+              aria-checked={settings.crossfade === seconds}
+              className={settings.crossfade === seconds ? "active" : ""}
+              onClick={() => settings.onCrossfadeChange(seconds)}
+            >
+              {seconds === 0 ? "No" : `${seconds} s`}
             </button>
           ))}
         </div>

@@ -799,3 +799,25 @@
 .m-menu-head .m-avatar { width: 58px !important; height: 58px !important; font-size: 22px; }
 .m-profile-photo { width: 128px !important; height: 128px !important; }
 .m-profile-photo .m-avatar { font-size: 50px; }
+
+.m-segmented-5 { grid-template-columns: repeat(5, 1fr); }
+.m-settings-group h3 + .m-hint { margin-top: -4px; }
+
+/* Resultado principal de la búsqueda */
+.m-top-result {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 14px 0 6px;
+  padding: 12px 14px 12px 12px !important;
+  border-radius: 20px !important;
+  text-align: left;
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--m-accent) 28%, transparent), transparent 70%),
+    var(--m-card) !important;
+}
+.m-top-art { width: 72px; height: 72px; flex: 0 0 auto; overflow: hidden; border-radius: 50%; }
+.m-top-result .m-track-text { flex: 1; min-width: 0; }
+.m-top-result .m-track-text strong { font-size: 18px; }
+.m-top-result > .m-icon { color: var(--m-muted); }

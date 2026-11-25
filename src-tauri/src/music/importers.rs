@@ -436,7 +436,7 @@ pub(super) fn collect_tracks(
         }
         Value::Array(items) => {
             let tracks: Vec<ExternalTrack> = items.iter().filter_map(track_from_json).collect();
-            let enough = tracks.len() >= 2 && tracks.len() * 5 >= items.len() * 3;
+            let enough = !tracks.is_empty() && tracks.len() * 5 >= items.len() * 3;
             let better = best.as_ref().is_none_or(|(list, _)| tracks.len() > list.len());
             if enough && better {
                 *best = Some((tracks, parent_title));

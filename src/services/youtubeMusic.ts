@@ -196,7 +196,7 @@ export async function fetchDiscover(
 
 /** Busca el álbum o el artista de una canción. */
 export async function lookupMusic(
-  kind: "album" | "artist",
+  kind: "album" | "artist" | "top",
   query: string,
 ): Promise<DiscoverItem> {
   const data = await bridgeJson("/lookup", { kind, q: query });

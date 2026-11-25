@@ -66,7 +66,13 @@ async function readTextFile(file: File): Promise<string> {
       : bytes[0] === 0xfe && bytes[1] === 0xff
         ? "utf-16be"
         : "utf-8";
-  return new TextDecoder(encoding).decode(bytes);
+  if (encoding !== "utf-8") return new TextDecoder(encoding).decode(bytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    // Excel en Windows guarda los CSV en Windows-1252 (acentos distintos).
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
 }
 
 const MODERN_SIZE_KEY = "foyu.window.modern";
@@ -655,6 +661,8 @@ function App() {
               theme: appearance.preference,
               onThemeChange: appearance.setPreference,
               updates,
+              crossfade: youtube.crossfade,
+              onCrossfadeChange: youtube.setCrossfade,
             }}
             theme={appearance.theme}
             onOpenSettings={() => goTo("settings")}

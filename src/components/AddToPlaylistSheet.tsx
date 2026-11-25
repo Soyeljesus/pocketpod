@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { SavedPlaylist, YoutubeTrack } from "../types/youtube";
 
@@ -18,6 +18,9 @@ export function AddToPlaylistSheet({
   onClose,
 }: AddToPlaylistSheetProps) {
   const [name, setName] = useState("");
+  // Solo se cierra si el toque empieza y termina fuera de la hoja: al cerrarse
+  // el teclado la hoja se mueve, y un toque en "Crear" no debe cerrarla.
+  const pressedOutside = useRef(false);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -25,7 +28,16 @@ export function AddToPlaylistSheet({
   };
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
+    <div
+      className="sheet-backdrop"
+      onPointerDown={(event) => {
+        pressedOutside.current = event.target === event.currentTarget;
+      }}
+      onClick={(event) => {
+        if (pressedOutside.current && event.target === event.currentTarget) onClose();
+        pressedOutside.current = false;
+      }}
+    >
       <section
         className="sheet"
         role="dialog"
@@ -52,7 +64,13 @@ export function AddToPlaylistSheet({
             autoComplete="off"
             enterKeyHint="done"
           />
-          <button type="submit" disabled={!name.trim()}>
+          <button
+            type="submit"
+            disabled={!name.trim()}
+            // Mantiene el teclado abierto: así la hoja no se mueve bajo el dedo.
+            onMouseDown={(event) => event.preventDefault()}
+            onPointerDown={(event) => event.preventDefault()}
+          >
             Crear
           </button>
         </form>

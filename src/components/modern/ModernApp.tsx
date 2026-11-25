@@ -998,8 +998,35 @@ function GenresScreen({ app }: { app: ModernAppProps }) {
   );
 }
 
+const topCache = new Map<string, Promise<DiscoverItem | null>>();
+
 function SearchScreen({ app, list }: ScreenProps) {
   const [focused, setFocused] = useState(false);
+  const [top, setTop] = useState<DiscoverItem | null>(null);
+
+  // Resultado principal: el artista más escuchado que coincide con lo escrito.
+  useEffect(() => {
+    const text = app.ytQuery.trim().toLowerCase();
+    if (text.length < 2) {
+      setTop(null);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      let found = topCache.get(text);
+      if (!found) {
+        found = lookupMusic("top", text).catch(() => null);
+        topCache.set(text, found);
+      }
+      void found.then((item) => {
+        if (active) setTop(item);
+      });
+    }, 500);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [app.ytQuery]);
   const { queries, tracks: songMatches } = app.suggestions;
   const typed = app.ytQuery.trim().toLowerCase();
   const visibleQueries = queries.filter((item) => item.toLowerCase() !== typed);
@@ -1095,6 +1122,31 @@ function SearchScreen({ app, list }: ScreenProps) {
           </div>
         )}
       </div>
+
+      {top && !app.ytError && (
+        <button
+          type="button"
+          className="m-top-result"
+          onClick={() =>
+            app.onOpenTarget({
+              kind: "artist",
+              browseId: top.id,
+              title: top.title,
+              thumbnailUrl: top.thumbnailUrl,
+            })
+          }
+        >
+          <span className="m-top-art">
+            <PlayerArtwork url={top.thumbnailUrl} label="" />
+          </span>
+          <span className="m-track-text">
+            <small>Resultado principal</small>
+            <strong>{top.title}</strong>
+            <small>{top.subtitle}</small>
+          </span>
+          <Icon name="chevron" />
+        </button>
+      )}
 
       {app.ytError ? (
         <p className="m-error">{app.ytError}</p>

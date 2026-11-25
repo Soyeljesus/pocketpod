@@ -127,8 +127,9 @@ fn valid_id(id: &str) -> bool {
 
 /// Quita del subtítulo el tipo ("Lista de reproducción", "Álbum"...).
 fn clean_subtitle(text: &str) -> String {
-    const KINDS: [&str; 8] = [
+    const KINDS: [&str; 10] = [
         "lista de reproducción", "playlist", "álbum", "album", "single", "ep", "sencillo", "canción",
+        "artista", "artist",
     ];
     text.split(" • ")
         .map(str::trim)
@@ -316,6 +317,34 @@ fn collect_any<'a>(value: &'a Value, keys: &[&str], out: &mut Vec<&'a Value>) {
         }
         _ => {}
     }
+}
+
+/// "Resultado principal" de una búsqueda: casi siempre el artista más escuchado.
+pub fn parse_top(value: &Value) -> Option<DiscoverItem> {
+    let card = first_key(value, "musicCardShelfRenderer")?;
+    let title = runs_text(card.get("title"));
+    let subtitle = clean_subtitle(&runs_text(card.get("subtitle")));
+    let run = card.pointer("/title/runs/0")?;
+    let browse = run.pointer("/navigationEndpoint/browseEndpoint");
+    let page_type = browse
+        .and_then(|endpoint| {
+            endpoint.pointer(
+                "/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType",
+            )
+        })
+        .and_then(Value::as_str);
+    if page_type != Some("MUSIC_PAGE_TYPE_ARTIST") || title.is_empty() {
+        return None;
+    }
+    let id = browse?.get("browseId")?.as_str()?.to_string();
+    valid_id(&id).then(|| DiscoverItem {
+        kind: "artist".to_string(),
+        id,
+        title,
+        subtitle,
+        thumbnail_url: last_thumbnail(card),
+        track: None,
+    })
 }
 
 /// Primer álbum o artista de una búsqueda filtrada.

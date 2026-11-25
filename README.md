@@ -18,6 +18,10 @@ El nombre viene de **F** de *free* y **Y** de *YouTube*, y suena como *for you*.
 - **Mantén presionada una canción** para ver Me gusta, Reproducir siguiente, Añadir a la cola, Descargar, Ver álbum y Ver artista. Cada artista tiene su página con canciones, álbumes y artistas parecidos.
 - **Avisos** al añadir a la cola o a una playlist, y **corazón** directo en Selecciones y en las tarjetas.
 - **Desliza de izquierda a derecha** para volver a la pantalla anterior.
+- **Crossfade**: en Configuración eliges 3, 6, 9 o 12 segundos de transición entre canciones.
+- **Búsqueda por popularidad**: arriba aparece el artista más escuchado que coincide y las canciones más reproducidas suben, aunque escribas solo parte del nombre.
+- **Reproducción más estable**: el audio se pide en partes y, si la conexión se corta, la canción sigue donde iba.
+- **Importa desde Spotify**: CSV de Exportify, TuneMyMusic, Soundiiz o Chosic, y el JSON de «Descargar tus datos» de Spotify.
 - **Menú de cuenta**: al tocar tu foto aparecen Cuenta, Configuración y Sobre FoYu.
 - **Búsqueda mientras escribes**: sugerencias y canciones aparecen sin pulsar Buscar.
 - **Me gusta** y descargas para escuchar sin conexión.
@@ -182,8 +186,8 @@ En **GitHub → Settings → Secrets and variables → Actions** configura:
 Después crea un tag con la versión de `package.json`:
 
 ```bash
-git tag -a v0.5.1 -m "FoYu 0.5.1"
-git push origin v0.5.1
+git tag -a v0.5.2 -m "FoYu 0.5.2"
+git push origin v0.5.2
 ```
 
 El workflow crea un borrador con los instaladores de Windows y la APK de Android. Revísalo y publícalo desde GitHub.

@@ -73,6 +73,9 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
 
   override fun load(webView: WebView) {
     super.load(webView)
+    // La siguiente canción, el crossfade y los botones de la notificación
+    // reproducen sin que la persona toque la pantalla.
+    webView.settings.mediaPlaybackRequiresUserGesture = false
     page = WeakReference(webView)
     current = WeakReference(this)
     FoYuWidgets.refresh(activity)

@@ -533,6 +533,8 @@ async fn lookup(
     let filter = match kind {
         "album" => "EgWKAQIYAWoMEA4QChADEAQQCRAF",
         "artist" => "EgWKAQIgAWoMEA4QChADEAQQCRAF",
+        // Resultado principal de la búsqueda general.
+        "top" => "",
         _ => return error(StatusCode::BAD_REQUEST, "Tipo no válido"),
     };
     let query = params.q.unwrap_or_default().trim().to_string();
@@ -540,7 +542,11 @@ async fn lookup(
         return error(StatusCode::BAD_REQUEST, "Búsqueda no válida");
     }
     match state.engine.search_raw(&query, filter).await {
-        Ok(value) => match super::discover::parse_lookup(&value, kind) {
+        Ok(value) => match if kind == "top" {
+            super::discover::parse_top(&value)
+        } else {
+            super::discover::parse_lookup(&value, kind)
+        } {
             Some(item) => Json(item).into_response(),
             None => error(StatusCode::NOT_FOUND, "No se encontró en YouTube Music"),
         },
@@ -604,6 +610,8 @@ async fn playlist(
 #[derive(Deserialize)]
 struct TokenParams {
     t: Option<String>,
+    /// En `/stream`: el reproductor se atascó y pide una URL nueva.
+    fresh: Option<String>,
 }
 
 async fn export_library(
@@ -651,6 +659,9 @@ async fn stream(
     }
 
     let range = headers.get(header::RANGE).cloned();
+    if params.fresh.is_some() {
+        state.invalidate_stream(&video_id);
+    }
 
     for attempt in 0..2 {
         let resolved = match state.resolve_cached(&video_id).await {
@@ -674,6 +685,26 @@ async fn stream(
     error(StatusCode::BAD_GATEWAY, "No se pudo abrir el stream")
 }
 
+const STREAM_CHUNK: u64 = 2 * 1024 * 1024;
+
+/// Convierte "bytes=N-" (o ningún rango) en "bytes=N-(N+2 MB)". Los rangos
+/// ya acotados se respetan si no superan ese tamaño.
+fn bounded_range(range: Option<&HeaderValue>) -> String {
+    let text = range.and_then(|value| value.to_str().ok()).unwrap_or("bytes=0-");
+    let spec = text.trim().strip_prefix("bytes=").unwrap_or("0-");
+    let (start, end) = spec.split_once('-').unwrap_or(("0", ""));
+    let start = start.trim().parse::<u64>().unwrap_or(0);
+    let limit = start + STREAM_CHUNK - 1;
+    let end = end
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|end| *end >= start)
+        .map(|end| end.min(limit))
+        .unwrap_or(limit);
+    format!("bytes={start}-{end}")
+}
+
 async fn proxy(
     state: &AppState,
     resolved: &ResolvedStream,
@@ -694,9 +725,9 @@ async fn proxy(
         request = request.header(name, value);
     }
 
-    if let Some(range) = range {
-        request = request.header(header::RANGE, range);
-    }
+    // YouTube frena o corta las descargas largas de una sola vez: el audio se
+    // pide en partes y el reproductor pide la siguiente cuando la necesita.
+    request = request.header(header::RANGE, bounded_range(range.as_ref()));
 
     let upstream = request
         .send()
@@ -1147,6 +1178,17 @@ fn random_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asks_youtube_for_bounded_chunks() {
+        let open = HeaderValue::from_static("bytes=1000-");
+        assert_eq!(bounded_range(Some(&open)), "bytes=1000-2098151");
+        assert_eq!(bounded_range(None), "bytes=0-2097151");
+        let small = HeaderValue::from_static("bytes=0-1");
+        assert_eq!(bounded_range(Some(&small)), "bytes=0-1");
+        let huge = HeaderValue::from_static("bytes=0-99999999");
+        assert_eq!(bounded_range(Some(&huge)), "bytes=0-2097151");
+    }
 
     #[test]
     fn accepts_only_real_style_video_ids() {

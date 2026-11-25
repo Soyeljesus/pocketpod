@@ -260,11 +260,11 @@ impl MusicEngine for InnerTube {
     }
 
     async fn search_raw(&self, query: &str, params: &str) -> Result<Value, String> {
-        self.post_music(
-            "search",
-            json!({ "context": { "client": self.music_client() }, "query": query, "params": params }),
-        )
-        .await
+        let mut body = json!({ "context": { "client": self.music_client() }, "query": query });
+        if !params.is_empty() {
+            body["params"] = json!(params);
+        }
+        self.post_music("search", body).await
     }
 
     async fn browse_page(
@@ -715,13 +715,57 @@ pub(super) fn is_spoken_content(title: &str, artist: &str, album: &str) -> bool 
             .any(|word| everything.contains(word))
 }
 
+/// Resultados de canciones: la relevancia de YouTube combinada con las
+/// reproducciones, para que lo más escuchado suba aunque se escriba poco.
 fn parse_search(value: &Value, limit: usize) -> Vec<Track> {
+    let mut renderers = Vec::new();
+    collect_renderers(value, &mut renderers);
+    let plays: std::collections::HashMap<String, f64> = renderers
+        .iter()
+        .filter_map(|item| Some((video_id_of(item)?, plays_of(item)?)))
+        .collect();
+
     let mut seen = std::collections::HashSet::new();
-    parse_tracks(value, usize::MAX, &mut seen)
+    let mut ranked: Vec<(f64, Track)> = parse_tracks(value, usize::MAX, &mut seen)
         .into_iter()
         .filter(|track| track.duration_sec <= MAX_SEARCH_SONG_SECONDS)
-        .take(limit)
-        .collect()
+        .enumerate()
+        .map(|(position, track)| {
+            let count = plays.get(&track.video_id).copied().unwrap_or(0.0);
+            // Cada puesto de relevancia pesa como multiplicar ×2 las reproducciones.
+            let score = (count + 1.0).log10() - position as f64 * 0.3;
+            (score, track)
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
+    ranked.into_iter().take(limit).map(|(_, track)| track).collect()
+}
+
+/// "84 M reproducciones", "7,3 M de visualizaciones", "19 K plays"...
+fn plays_of(item: &Value) -> Option<f64> {
+    (1..4).find_map(|column| {
+        runs_of(item, column).into_iter().find_map(|text| {
+            let lower = text.to_lowercase();
+            if !["reproducci", "visualizaci", "plays", "views"].iter().any(|word| lower.contains(word)) {
+                return None;
+            }
+            parse_count(&lower)
+        })
+    })
+}
+
+fn parse_count(text: &str) -> Option<f64> {
+    let mut parts = text.split_whitespace();
+    let number: f64 = parts.next()?.replace(',', ".").parse().ok()?;
+    let rest: Vec<&str> = parts.collect();
+    let multiplier = match rest.first().copied() {
+        Some("k") | Some("mil") if rest.get(1) == Some(&"m") => 1e9,
+        Some("k") | Some("mil") => 1e3,
+        Some("m") | Some("mill.") => 1e6,
+        Some("b") | Some("mm") => 1e9,
+        _ => 1.0,
+    };
+    Some(number * multiplier)
 }
 
 pub(super) fn parse_tracks(
@@ -1265,6 +1309,15 @@ mod tests {
         }]});
         assert_eq!(find_continuation(&legacy).as_deref(), Some("next-b"));
         assert_eq!(find_continuation(&json!({ "contents": [] })), None);
+    }
+
+    #[test]
+    fn reads_play_counts() {
+        assert_eq!(parse_count("84 m reproducciones"), Some(84e6));
+        assert_eq!(parse_count("7,3 m de visualizaciones"), Some(7.3e6));
+        assert_eq!(parse_count("19 k reproducciones"), Some(19e3));
+        assert_eq!(parse_count("1,2 b views"), Some(1.2e9));
+        assert_eq!(parse_count("850 reproducciones"), Some(850.0));
     }
 
     #[test]

@@ -29,6 +29,24 @@ const SMART_EVERY = 3;
 const SMART_SEEDS = 4;
 const VOLUME_KEY = "foyu.volume";
 const HISTORY_KEY = "foyu.history";
+const CROSSFADE_KEY = "foyu.crossfade";
+/** Segundos sin avanzar antes de reanudar el audio. */
+const STALL_SECONDS = 8;
+const MAX_RECOVERIES = 3;
+
+function loadCrossfade(): number {
+  try {
+    const value = Number(localStorage.getItem(CROSSFADE_KEY) ?? 0);
+    return [0, 3, 6, 9, 12].includes(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Interrumpir una reproducción (pausar o cambiar de canción) no es un error. */
+function isInterruption(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
 const PLAYED_LIMIT = 60;
 
 /** Lo último que escuchaste, solo en este dispositivo. */
@@ -152,6 +170,9 @@ export interface UseYoutubeMusicResult {
   seek: (seconds: number) => void;
   volume: number;
   setVolume: (volume: number) => void;
+  /** Segundos de transición entre canciones (0 = sin crossfade). */
+  crossfade: number;
+  setCrossfade: (seconds: number) => void;
   pause: () => void;
   toggleLike: (track: YoutubeTrack) => void;
   addLikes: (tracks: YoutubeTrack[]) => void;
@@ -230,40 +251,73 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     }
   });
   const volumeRef = useRef(volume);
+  const [crossfade, setCrossfadeState] = useState(loadCrossfade);
+  const crossfadeRef = useRef(crossfade);
+  /** Dos pistas: mientras una termina, la otra entra (crossfade). */
+  const playersRef = useRef<HTMLAudioElement[]>([]);
+  const activeRef = useRef(0);
+  const fadeTimerRef = useRef<number | null>(null);
+  const crossfadeNextRef = useRef(false);
+  const fadeStartedRef = useRef(0);
+  const recoverRef = useRef<(reason: "stall" | "error") => void>(() => {});
+  const watchRef = useRef({ time: -1, since: 0, retries: 0 });
 
   const getAudio = useCallback((): HTMLAudioElement => {
-    if (audioRef.current) return audioRef.current;
+    if (playersRef.current.length === 0) {
+      playersRef.current = [0, 1].map(() => {
+        const audio = new Audio();
+        audio.preload = "auto";
+        audio.volume = volumeRef.current;
+        const isActive = () => playersRef.current[activeRef.current] === audio;
 
-    const audio = new Audio();
-    audio.preload = "auto";
-    audio.volume = volumeRef.current;
-
-    audio.addEventListener("play", () => setStatus("playing"));
-    audio.addEventListener("pause", () => setStatus("paused"));
-    audio.addEventListener("ended", () => {
-      if (repeatRef.current) {
-        audio.currentTime = 0;
-        void audio.play().catch(() => nextRef.current());
-      } else {
-        nextRef.current();
-      }
-    });
-    audio.addEventListener("loadedmetadata", () => {
-      if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        setDuration(audio.duration);
-      }
-    });
-    audio.addEventListener("error", () => {
-      // Solo es un error real si había una pista cargada.
-      if (audio.currentSrc) {
-        setError("No se pudo reproducir el audio. Prueba con otra canción.");
-        setStatus("stopped");
-      }
-    });
-
-    audioRef.current = audio;
-    return audio;
+        audio.addEventListener("play", () => {
+          if (isActive()) setStatus("playing");
+        });
+        audio.addEventListener("pause", () => {
+          if (isActive()) setStatus("paused");
+        });
+        audio.addEventListener("ended", () => {
+          if (!isActive()) return;
+          if (repeatRef.current) {
+            audio.currentTime = 0;
+            void audio.play().catch(() => nextRef.current());
+          } else {
+            nextRef.current();
+          }
+        });
+        audio.addEventListener("loadedmetadata", () => {
+          if (isActive() && Number.isFinite(audio.duration) && audio.duration > 0) {
+            setDuration(audio.duration);
+          }
+        });
+        audio.addEventListener("error", () => {
+          // Si se corta la conexión con YouTube, se reanuda donde iba.
+          if (isActive() && audio.currentSrc) recoverRef.current("error");
+        });
+        return audio;
+      });
+      audioRef.current = playersRef.current[0];
+    }
+    return playersRef.current[activeRef.current];
   }, []);
+
+  const stopFade = useCallback(() => {
+    if (fadeTimerRef.current !== null) window.clearInterval(fadeTimerRef.current);
+    fadeTimerRef.current = null;
+  }, []);
+
+  /** Para la otra pista y deja la activa con el volumen normal. */
+  const silenceOther = useCallback(() => {
+    stopFade();
+    const players = playersRef.current;
+    const other = players[1 - activeRef.current];
+    if (other) {
+      other.pause();
+      other.removeAttribute("src");
+    }
+    const active = players[activeRef.current];
+    if (active) active.volume = volumeRef.current;
+  }, [stopFade]);
 
   // Disponibilidad del puente local.
   useEffect(() => {
@@ -287,12 +341,44 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     };
   }, []);
 
-  // La barra de progreso lee currentTime 4 veces por segundo mientras suena.
+  // Mientras suena: barra de progreso, vigilante de atascos y crossfade.
   useEffect(() => {
     if (status !== "playing") return;
     const id = window.setInterval(() => {
-      const audio = audioRef.current;
-      if (audio) setPosition(audio.currentTime || 0);
+      const audio = playersRef.current[activeRef.current];
+      if (!audio) return;
+      const time = audio.currentTime || 0;
+      setPosition(time);
+
+      // Si el audio "suena" pero no avanza, YouTube cortó la conexión.
+      const watch = watchRef.current;
+      if (!audio.paused && Math.abs(time - watch.time) < 0.05) {
+        if (watch.since === 0) watch.since = Date.now();
+        else if (Date.now() - watch.since > STALL_SECONDS * 1000) {
+          watch.since = 0;
+          recoverRef.current("stall");
+        }
+      } else {
+        watch.time = time;
+        watch.since = 0;
+      }
+
+      // Crossfade: la siguiente canción empieza mientras esta se apaga.
+      const fade = crossfadeRef.current;
+      const length = audio.duration;
+      if (
+        fade > 0 &&
+        !repeatRef.current &&
+        Number.isFinite(length) &&
+        length > fade + 10 &&
+        length - time <= fade &&
+        fadeStartedRef.current !== requestRef.current
+      ) {
+        fadeStartedRef.current = requestRef.current;
+        crossfadeNextRef.current = true;
+        nextRef.current();
+        crossfadeNextRef.current = false;
+      }
     }, 250);
     return () => window.clearInterval(id);
   }, [status]);
@@ -315,7 +401,7 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
 
   useEffect(() => {
     return () => {
-      audioRef.current?.pause();
+      playersRef.current.forEach((audio) => audio.pause());
     };
   }, []);
 
@@ -454,9 +540,22 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
       });
       setPosition(0);
       setDuration(track.durationSec || 0);
-      setStatus("stopped");
       setLoading(true);
+      watchRef.current = { time: -1, since: 0, retries: 0 };
       refreshUpNext();
+
+      // Con crossfade, la canción anterior sigue sonando en la otra pista.
+      const outgoing = getAudio();
+      const fade =
+        crossfadeNextRef.current && crossfadeRef.current > 0 && !outgoing.paused;
+      if (fade) {
+        stopFade();
+        activeRef.current = 1 - activeRef.current;
+      } else {
+        silenceOther();
+        outgoing.pause();
+        setStatus("stopped");
+      }
 
       try {
         // Si la canción está descargada, se sirve desde el disco: así suena
@@ -470,19 +569,77 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
         if (request !== requestRef.current) return;
 
         const audio = getAudio();
+        audio.volume = fade ? 0 : volumeRef.current;
         audio.src = src;
         audio.load();
         await audio.play();
+
+        if (fade && request === requestRef.current) {
+          const seconds = crossfadeRef.current;
+          const started = Date.now();
+          fadeTimerRef.current = window.setInterval(() => {
+            const progress = Math.min(1, (Date.now() - started) / (seconds * 1000));
+            audio.volume = volumeRef.current * progress;
+            outgoing.volume = volumeRef.current * (1 - progress);
+            if (progress >= 1) {
+              stopFade();
+              outgoing.pause();
+              outgoing.removeAttribute("src");
+            }
+          }, 80);
+        }
       } catch (err) {
-        if (request !== requestRef.current) return;
+        if (request !== requestRef.current || isInterruption(err)) return;
+        silenceOther();
         setError(describeError(err));
         setStatus("stopped");
       } finally {
         if (request === requestRef.current) setLoading(false);
       }
     },
-    [getAudio, refreshUpNext],
+    [getAudio, refreshUpNext, silenceOther, stopFade],
   );
+
+  // Reanuda la canción donde iba con una conexión nueva a YouTube.
+  useEffect(() => {
+    recoverRef.current = (reason) => {
+      const track = currentRef.current;
+      const audio = playersRef.current[activeRef.current];
+      if (!track || !audio) return;
+      const watch = watchRef.current;
+      if (watch.retries >= MAX_RECOVERIES) {
+        if (reason === "error") {
+          setError("Se perdió la conexión con la canción. Prueba de nuevo.");
+          setStatus("stopped");
+        } else {
+          nextRef.current();
+        }
+        return;
+      }
+      watch.retries += 1;
+      const request = requestRef.current;
+      const resumeAt = audio.currentTime || 0;
+      const offline = downloadsRef.current.some((item) => item.videoId === track.videoId);
+      const source = offline
+        ? getOfflineStreamUrl(track.videoId)
+        : getStreamUrl(track.videoId).then((url) => `${url}&fresh=${Date.now()}`);
+      void source
+        .then((src) => {
+          if (request !== requestRef.current) return;
+          audio.src = src;
+          audio.addEventListener(
+            "loadedmetadata",
+            () => {
+              if (resumeAt > 0) audio.currentTime = resumeAt;
+            },
+            { once: true },
+          );
+          audio.load();
+          return audio.play();
+        })
+        .catch(() => {});
+    };
+  });
 
   const playTrack = useCallback(
     async (track: YoutubeTrack, nextQueue?: YoutubeTrack[]) => {
@@ -583,7 +740,7 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
   }, [next]);
 
   const previous = useCallback(() => {
-    const audio = audioRef.current;
+    const audio = playersRef.current[activeRef.current];
     if (audio && audio.currentTime > 3) {
       audio.currentTime = 0;
       setPosition(0);
@@ -736,15 +893,26 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     }
 
     if (audio.paused) {
-      void audio.play().catch((err) => setError(describeError(err)));
+      setError(null);
+      if (!audio.currentSrc) {
+        // La pista se vació (por ejemplo tras un crossfade cortado): se vuelve a cargar.
+        void startTrack(currentRef.current);
+        return;
+      }
+      void audio.play().catch((err) => {
+        if (!isInterruption(err)) recoverRef.current("error");
+      });
     } else {
+      // Al pausar en medio de un crossfade, se quedan las dos pistas quietas.
+      silenceOther();
       audio.pause();
     }
-  }, [getAudio, playTrack]);
+  }, [getAudio, playTrack, silenceOther, startTrack]);
 
   const pause = useCallback(() => {
-    audioRef.current?.pause();
-  }, []);
+    silenceOther();
+    playersRef.current[activeRef.current]?.pause();
+  }, [silenceOther]);
 
   const commitLikes = useCallback(
     (next: YoutubeTrack[], updatedAt = Date.now()) => {
@@ -808,11 +976,25 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     [refreshDownloads],
   );
 
+  const setCrossfade = useCallback((seconds: number) => {
+    crossfadeRef.current = seconds;
+    setCrossfadeState(seconds);
+    try {
+      localStorage.setItem(CROSSFADE_KEY, String(seconds));
+    } catch {
+      // Sin almacenamiento, el ajuste dura hasta cerrar la app.
+    }
+  }, []);
+
   const setVolume = useCallback((value: number) => {
     const clean = Math.min(1, Math.max(0, value));
     volumeRef.current = clean;
     setVolumeState(clean);
-    if (audioRef.current) audioRef.current.volume = clean;
+    // Durante un crossfade, el propio fundido usa el volumen nuevo.
+    if (fadeTimerRef.current === null) {
+      const audio = playersRef.current[activeRef.current];
+      if (audio) audio.volume = clean;
+    }
     try {
       localStorage.setItem(VOLUME_KEY, String(clean));
     } catch {
@@ -965,6 +1147,8 @@ export function useYoutubeMusic(): UseYoutubeMusicResult {
     seek,
     volume,
     setVolume,
+    crossfade,
+    setCrossfade,
     pause,
     toggleLike,
     addLikes,

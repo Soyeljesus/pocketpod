@@ -523,6 +523,13 @@ fn column(header: &[String], names: &[&str]) -> Option<usize> {
         .find_map(|name| header.iter().position(|value| value == name))
 }
 
+/// Encabezados con otras palabras ("Nombre de la canción", "Track Title"...).
+fn column_like(header: &[String], words: &[&str], avoid: &[&str]) -> Option<usize> {
+    header.iter().position(|value| {
+        words.iter().any(|word| value.contains(word)) && !avoid.iter().any(|word| value.contains(word))
+    })
+}
+
 fn parse_duration_field(value: &str, header: &str) -> f64 {
     let value = value.trim();
     if value.contains(':') {
@@ -550,10 +557,15 @@ fn parse_table(text: &str, stem: &str) -> Option<Vec<Collection>> {
     let (header, rows) = records.split_first()?;
     let header: Vec<String> = header.iter().map(|value| tokens(value).join("")).collect();
 
-    let title = column(&header, &["title", "trackname", "track", "songname", "song", "name", "titulo", "nombre", "cancion"])?;
-    let artist = column(&header, &["artist", "artistnames", "artistname", "artists", "artista", "artistas", "creator", "albumartistnames"]);
-    let album = column(&header, &["album", "albumname", "albumtitle"]);
-    let duration = column(&header, &["durationseconds", "durationms", "trackdurationms", "duration", "duracion", "time", "tiempo"]);
+    const NOT_TITLE: [&str; 9] = ["uri", "url", "id", "number", "numero", "album", "artist", "playlist", "isrc"];
+    let title = column(&header, &["title", "trackname", "track", "songname", "song", "name", "titulo", "nombre", "cancion"])
+        .or_else(|| column_like(&header, &["cancion", "song", "track", "title", "titulo", "tema"], &NOT_TITLE))?;
+    let artist = column(&header, &["artist", "artistnames", "artistname", "artists", "artista", "artistas", "creator", "albumartistnames"])
+        .or_else(|| column_like(&header, &["artist", "interprete", "autor"], &["id", "uri", "album"]));
+    let album = column(&header, &["album", "albumname", "albumtitle"])
+        .or_else(|| column_like(&header, &["album"], &["artist", "date", "fecha", "id", "uri"]));
+    let duration = column(&header, &["durationseconds", "durationms", "trackdurationms", "duration", "duracion", "time", "tiempo"])
+        .or_else(|| column_like(&header, &["duration", "duracion"], &[]));
     let playlist = column(&header, &["playlist", "playlistname", "collection", "lista"]);
     let kind = column(&header, &["type", "tipo"]);
     let video = column(&header, &["videoid", "youtubeid"]);
@@ -688,6 +700,34 @@ mod tests {
         assert_eq!(rows.name, "Rock");
         assert_eq!(rows.rows[0].artist, "Andrés Calamaro");
         assert_eq!(rows.rows[0].duration_sec, 273.0);
+
+        // Exportify actual (más columnas, con BOM y artistas separados por coma).
+        let exportify_new = "\u{feff}\"Track URI\",\"Track Name\",\"Album Name\",\"Artist Name(s)\",\"Release Date\",\"Duration (ms)\",\"Popularity\",\"Explicit\",\"Added By\",\"Added At\",\"Genres\",\"Record Label\"\r\n\"spotify:track:1\",\"Rakata\",\"Pa'l Mundo\",\"Wisin & Yandel\",\"2005\",\"173000\",\"70\",\"false\",\"\",\"2024-01-01T00:00:00Z\",\"reggaeton\",\"Machete\"\r\n";
+        let rows = &parse_file("Mi_playlist.csv", exportify_new).unwrap()[0];
+        assert_eq!(rows.rows[0].title, "Rakata");
+        assert_eq!(rows.rows[0].artist, "Wisin & Yandel");
+
+        // TuneMyMusic.
+        let tune = "Track name,Artist name,Album,Playlist name,Type,ISRC,Spotify - id\nRakata,Wisin & Yandel,Pa'l Mundo,Fiesta,Playlist,USUM7,1\n";
+        assert_eq!(parse_file("x.csv", tune).unwrap()[0].name, "Fiesta");
+
+        // Soundiiz y Chosic.
+        let soundiiz = "title,artist,album,isrc\nRakata,Wisin & Yandel,Pa'l Mundo,USUM7\n";
+        assert_eq!(parse_file("x.csv", soundiiz).unwrap()[0].rows.len(), 1);
+        let chosic = "#,Song,Artist,Popularity,BPM,Genres,Parent Genres,Album,Album Date,Time\n1,Rakata,Wisin & Yandel,70,98,reggaeton,Latin,Pa'l Mundo,2005,02:53\n";
+        assert_eq!(parse_file("x.csv", chosic).unwrap()[0].rows[0].duration_sec, 173.0);
+
+        // Encabezados en español con otras palabras.
+        let spanish = "Nombre de la canción;Nombre del artista;Nombre del álbum;Duración (ms)\nRakata;Wisin & Yandel;Pa'l Mundo;173000\n";
+        let rows = &parse_file("x.csv", spanish).unwrap()[0].rows[0];
+        assert_eq!((rows.title.as_str(), rows.artist.as_str()), ("Rakata", "Wisin & Yandel"));
+        assert_eq!(rows.duration_sec, 173.0);
+
+        // "Descargar tus datos" de Spotify: biblioteca y playlists en JSON.
+        let library = r#"{"tracks":[{"artist":"Wisin & Yandel","album":"Pa'l Mundo","track":"Rakata","uri":"spotify:track:1"}]}"#;
+        assert_eq!(parse_file("YourLibrary.json", library).unwrap()[0].rows[0].title, "Rakata");
+        let lists = r#"{"playlists":[{"name":"Fiesta","lastModifiedDate":"2024-01-01","items":[{"track":{"trackName":"Rakata","artistName":"Wisin & Yandel","albumName":"Pa'l Mundo","trackUri":"spotify:track:1"},"episode":null,"localTrack":null,"addedDate":"2024-01-01"}]}]}"#;
+        assert_eq!(parse_file("Playlist1.json", lists).unwrap()[0].rows[0].artist, "Wisin & Yandel");
 
         let grouped = "Título;Artista;Playlist\nUno;A;Lista 1\nDos;B;Lista 2\n";
         assert_eq!(parse_file("x.csv", grouped).unwrap().len(), 2);

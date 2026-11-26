@@ -187,8 +187,8 @@ En **GitHub → Settings → Secrets and variables → Actions** configura:
 Después crea un tag con la versión de `package.json`:
 
 ```bash
-git tag -a v0.5.3 -m "FoYu 0.5.3"
-git push origin v0.5.3
+git tag -a v0.5.4 -m "FoYu 0.5.4"
+git push origin v0.5.4
 ```
 
 El workflow crea un borrador con los instaladores de Windows y la APK de Android. Revísalo y publícalo desde GitHub.

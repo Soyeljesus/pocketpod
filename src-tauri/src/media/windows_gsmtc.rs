@@ -111,7 +111,10 @@ use super::MediaStateDto;
 
 fn is_target_player(app_id: &str) -> bool {
     let id = app_id.to_lowercase();
-    id.contains("spotify") || id.contains("apple") || id.contains("itunes")
+    // El audio de FoYu también aparece como sesión de Windows: nunca se toma
+    // como "otra app sonando", o FoYu se pausaría a sí misma.
+    let own = ["pocketpod", "foyu", "msedgewebview"].iter().any(|name| id.contains(name));
+    !own && (id.contains("spotify") || id.contains("apple") || id.contains("itunes"))
 }
 
 /// Elige la mejor sesión disponible. Prioriza la que está reproduciendo y,
@@ -149,12 +152,12 @@ fn get_media_session() -> Option<GlobalSystemMediaTransportControlsSession> {
         candidates.push((session, known, playing));
     }
 
+    // Solo Spotify y Apple Music: navegadores, otras apps y la propia FoYu
+    // no cuentan, para no pausar ni mostrar audio que no es de ellos.
     let index = candidates
         .iter()
         .position(|(_, known, playing)| *playing && *known)
-        .or_else(|| candidates.iter().position(|(_, _, playing)| *playing))
-        .or_else(|| candidates.iter().position(|(_, known, _)| *known))
-        .or(if candidates.is_empty() { None } else { Some(0) })?;
+        .or_else(|| candidates.iter().position(|(_, known, _)| *known))?;
 
     Some(candidates.swap_remove(index).0)
 }
@@ -282,4 +285,18 @@ pub fn seek_to(seconds: f64) -> Result<(), String> {
         }
     }
     Err("No se pudo cambiar la posición".into())
+}
+#[cfg(test)]
+mod tests {
+    use super::is_target_player;
+
+    #[test]
+    fn only_spotify_and_apple_music_count_as_other_players() {
+        assert!(is_target_player("Spotify.exe"));
+        assert!(is_target_player("AppleInc.AppleMusicWin_nzyj5cx40ttqa!App"));
+        assert!(!is_target_player("com.pocketpod.app"));
+        assert!(!is_target_player("FoYu"));
+        assert!(!is_target_player("Chrome"));
+        assert!(!is_target_player("MSEdge"));
+    }
 }

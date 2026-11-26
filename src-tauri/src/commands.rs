@@ -209,6 +209,38 @@ pub fn google_sign_in(
 }
 
 #[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn update_download(
+    handle: State<'_, AndroidMediaHandle>,
+    url: String,
+    version: String,
+) -> Result<(), String> {
+    let handle = handle.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || backend::download_update(&handle, url, version))
+        .await
+        .map_err(|_| "update_download_failed".to_string())?
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command(async)]
+pub fn update_install(handle: State<'_, AndroidMediaHandle>, version: String) -> Result<String, String> {
+    backend::install_update(&handle, version)
+}
+
+/// En Windows las actualizaciones se abren en el navegador.
+#[cfg(not(target_os = "android"))]
+#[tauri::command(async)]
+pub fn update_download(_url: String, _version: String) -> Result<(), String> {
+    Err("update_not_supported".to_string())
+}
+
+#[cfg(not(target_os = "android"))]
+#[tauri::command(async)]
+pub fn update_install(_version: String) -> Result<String, String> {
+    Err("update_not_supported".to_string())
+}
+
+#[cfg(target_os = "android")]
 #[tauri::command(async)]
 pub fn google_clear_credential(handle: State<'_, AndroidMediaHandle>) -> Result<(), String> {
     backend::clear_google_credential(&handle)

@@ -122,6 +122,26 @@ pub fn update_widget(
     call::<Option<serde_json::Value>>(handle, "updateWidget", state).map(|_| ())
 }
 
+/// Descarga el APK nuevo. Puede tardar: se llama desde un hilo aparte.
+pub fn download_update(handle: &AndroidMediaHandle, url: String, version: String) -> Result<(), String> {
+    call::<serde_json::Value>(
+        handle,
+        "downloadUpdate",
+        serde_json::json!({ "url": url, "version": version }),
+    )
+    .map(|_| ())
+}
+
+/// Devuelve "installing" o "permission" (falta permitir instalar apps).
+pub fn install_update(handle: &AndroidMediaHandle, version: String) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Status {
+        status: String,
+    }
+    call::<Status>(handle, "installUpdate", serde_json::json!({ "version": version }))
+        .map(|result| result.status)
+}
+
 pub fn leave_app(handle: &AndroidMediaHandle) -> Result<(), String> {
     call::<Option<serde_json::Value>>(handle, "moveToBackground", ()).map(|_| ())
 }

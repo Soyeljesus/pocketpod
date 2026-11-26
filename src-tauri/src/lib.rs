@@ -70,6 +70,8 @@ pub fn run() {
             commands::google_clear_credential,
             commands::youtube_library_fetch,
             commands::youtube_disconnect,
+            commands::update_download,
+            commands::update_install,
             commands::music_bridge_info
         ])
         .run(tauri::generate_context!())

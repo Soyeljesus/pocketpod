@@ -1,4 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { IS_ANDROID } from "./mediaBridge";
 
@@ -19,6 +20,23 @@ export interface AvailableUpdate {
   downloadUrl: string;
   /** Página de la release en GitHub. */
   releaseUrl: string;
+  /** APK para instalar dentro de la app (solo Android). */
+  apkUrl: string | null;
+  /** Tamaño del archivo en bytes, si se conoce. */
+  sizeBytes: number;
+  /** Novedades escritas en la release. */
+  notes: string;
+}
+
+/** Descarga la APK dentro de la app (Android). */
+export async function downloadUpdate(update: AvailableUpdate): Promise<void> {
+  if (!update.apkUrl) throw new Error("update_not_supported");
+  await invoke("update_download", { url: update.apkUrl, version: update.version });
+}
+
+/** Abre el instalador; devuelve "permission" si Android aún no lo permite. */
+export async function installDownloadedUpdate(version: string): Promise<string> {
+  return invoke<string>("update_install", { version });
 }
 
 function parseVersion(value: string): number[] {
@@ -66,7 +84,7 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
 
   const version = tag.replace(/^v/i, "");
 
-  const assets: Array<{ name?: string; browser_download_url?: string }> =
+  const assets: Array<{ name?: string; browser_download_url?: string; size?: number }> =
     Array.isArray(data.assets) ? data.assets : [];
 
   const androidAsset = assets.find((asset) => /\.apk$/i.test(asset.name ?? ""));
@@ -77,10 +95,17 @@ export async function checkForUpdate(): Promise<AvailableUpdate | null> {
   const asset = IS_ANDROID ? androidAsset : windowsAsset;
   const releaseUrl = String(data.html_url ?? RELEASES_PAGE);
 
+  const apkUrl = androidAsset?.browser_download_url ?? "";
   return {
     version,
     downloadUrl: asset?.browser_download_url ?? releaseUrl,
     releaseUrl,
+    apkUrl:
+      IS_ANDROID && apkUrl.startsWith(`https://github.com/${REPO}/releases/download/`)
+        ? apkUrl
+        : null,
+    sizeBytes: Number(asset?.size ?? 0) || 0,
+    notes: String(data.body ?? "").slice(0, 4000),
   };
 }
 

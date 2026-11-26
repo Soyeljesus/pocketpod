@@ -33,6 +33,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Las novedades de cada versión salen de RELEASE_NOTES.md y FoYu las
+      # muestra en su pantalla de actualización.
+      - name: Release notes
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo 'body<<NOTES_EOF'
+            cat RELEASE_NOTES.md
+            echo
+            echo 'NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and draft release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -48,18 +61,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "FoYu ${{ github.ref_name }}"
-          releaseBody: |
-            FoYu para Windows y Android.
-
-            **Windows**: descarga `FoYu_*_x64-setup.exe` (recomendado) o el `.msi`.
-            **Android**: descarga `FoYu_<versión>_arm64.apk`.
-
-            Busca y escucha música, crea playlists, importa desde otros
-            servicios, exporta tu biblioteca y añade widgets en Android. Tus datos se quedan en tu
-            dispositivo: esta versión no incluye cuenta ni copia en la nube.
-
-            Android puede avisar que la app no viene de Play Store.
-            FoYu no está afiliada a YouTube, Google, Spotify, Apple ni Deezer.
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false
 

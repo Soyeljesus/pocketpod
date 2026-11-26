@@ -5,6 +5,8 @@
     <!-- Mantener la música sonando con la pantalla apagada y mostrar el reproductor. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Instalar actualizaciones de FoYu desde la propia app (Android pide permiso una vez). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- FoYu no usa huella ni biometría, aunque las declare una librería. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" tools:node="remove" />

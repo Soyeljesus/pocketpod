@@ -17,7 +17,7 @@ import type {
   IpodView,
 } from "./components/ipod/IpodDisplay";
 import { ClickWheel } from "./components/ipod/ClickWheel";
-import { UpdatePrompt } from "./components/ipod/UpdatePrompt";
+import { UpdateSheet } from "./components/UpdateSheet";
 import { ModernApp } from "./components/modern/ModernApp";
 import { useUpdateCheck } from "./hooks/useUpdateCheck";
 import { useAppearance } from "./hooks/useAppearance";
@@ -721,13 +721,7 @@ function App() {
             {toast.text}
           </div>
         )}
-        {updates.prompt && design === "ipod" && (
-          <UpdatePrompt
-            version={updates.prompt.version}
-            onInstall={updates.install}
-            onDismiss={updates.dismiss}
-          />
-        )}
+        <UpdateSheet updates={updates} />
       </div>
     </div>
   );

@@ -821,3 +821,47 @@
 .m-top-result .m-track-text { flex: 1; min-width: 0; }
 .m-top-result .m-track-text strong { font-size: 18px; }
 .m-top-result > .m-icon { color: var(--m-muted); }
+
+/* ---------- Pantalla de actualización ---------- */
+.update-backdrop { z-index: 45; align-items: flex-end; }
+.update-sheet {
+  max-height: 88%;
+  gap: 16px;
+  padding: 22px 20px max(calc(env(safe-area-inset-bottom, 0px) + 18px), 28px) !important;
+  color: #f5f6fb !important;
+  background: #14182a !important;
+}
+.update-head { display: flex; align-items: center; gap: 14px; }
+.update-head img { width: 56px; height: 56px; border-radius: 14px; }
+.update-head div { display: flex; flex-direction: column; gap: 2px; }
+.update-head strong { font-family: "Outfit", "Inter", system-ui, sans-serif; font-size: 26px; }
+.update-head small { font-size: 13px; color: rgba(245, 246, 251, 0.66); }
+.update-notes {
+  min-height: 0;
+  max-height: 42vh;
+  overflow-y: auto;
+  padding-right: 4px;
+  font-size: 15px;
+  line-height: 1.45;
+  color: rgba(245, 246, 251, 0.84);
+}
+.update-notes h4 { margin: 14px 0 6px; font-size: 15px; color: #b9c6ff; }
+.update-notes p { margin: 0 0 8px; }
+.update-notes p.bullet { position: relative; padding-left: 16px; }
+.update-notes p.bullet::before { content: "•"; position: absolute; left: 2px; }
+.update-status p { margin: 6px 0 0; font-size: 13.5px; color: rgba(245, 246, 251, 0.75); }
+.update-bar { display: block; height: 6px; overflow: hidden; border-radius: 3px; background: rgba(255, 255, 255, 0.14); }
+.update-bar i { display: block; height: 100%; border-radius: 3px; background: #b9c6ff; transition: width 0.25s ease; }
+.update-actions { display: flex; flex-direction: column; gap: 10px; }
+.update-actions button {
+  min-height: 54px;
+  border-radius: 27px !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+}
+.update-install { color: #11131b !important; background: #b9c6ff !important; }
+.update-later { color: #f5f6fb !important; border: 1.5px solid rgba(255, 255, 255, 0.28) !important; }
+.update-actions button:disabled { opacity: 0.6; }
+.update-hint { margin: 0; text-align: center; font-size: 12.5px; color: rgba(245, 246, 251, 0.6); }
+.desktop-modern .update-backdrop { align-items: center; justify-content: center; }
+.desktop-modern .update-sheet { max-width: 520px; border-radius: 24px; }

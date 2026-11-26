@@ -52,6 +52,12 @@ class WidgetArgs {
 }
 
 @InvokeArg
+class UpdateArgs {
+  var url: String = ""
+  var version: String = ""
+}
+
+@InvokeArg
 class GoogleSignInArgs {
   var clientId: String = ""
   var nonce: String = ""
@@ -281,6 +287,50 @@ class MediaSessionPlugin(private val activity: Activity) : Plugin(activity) {
     fun sendWidgetAction(action: String): Boolean {
       if (action !in ACTIONS && !SEEK.matches(action)) return false
       return current?.get()?.runWidgetAction(action) == true
+    }
+  }
+
+  /** Descarga la actualización y avisa el progreso a la app. */
+  @Command
+  fun downloadUpdate(invoke: Invoke) {
+    val args = invoke.parseArgs(UpdateArgs::class.java)
+    Thread {
+      try {
+        val file = FoYuUpdater.download(activity, args.url, args.version) { percent ->
+          val view = page?.get() ?: return@download
+          view.post {
+            view.evaluateJavascript("window.__foyuUpdate && window.__foyuUpdate($percent)", null)
+          }
+        }
+        invoke.resolve(JSObject().put("ready", file.exists()))
+      } catch (error: Exception) {
+        val message = error.message.orEmpty()
+        invoke.reject(if (message.startsWith("update_")) message else "update_download_failed")
+      }
+    }.start()
+  }
+
+  /** Abre el instalador de Android, o el permiso para instalar si falta. */
+  @Command
+  fun installUpdate(invoke: Invoke) {
+    val args = invoke.parseArgs(UpdateArgs::class.java)
+    val file = FoYuUpdater.apkFile(activity, args.version)
+    if (!file.exists()) {
+      invoke.reject("update_missing")
+      return
+    }
+    activity.runOnUiThread {
+      try {
+        if (!FoYuUpdater.canInstall(activity)) {
+          FoYuUpdater.openInstallPermission(activity)
+          invoke.resolve(JSObject().put("status", "permission"))
+        } else {
+          FoYuUpdater.install(activity, file)
+          invoke.resolve(JSObject().put("status", "installing"))
+        }
+      } catch (_: Exception) {
+        invoke.reject("update_install_failed")
+      }
     }
   }
 

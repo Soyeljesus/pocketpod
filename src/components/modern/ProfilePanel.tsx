@@ -64,7 +64,7 @@ export function ProfileButtons({
   settings: ProfileSettings;
   onOpen: (section: ProfileSection) => void;
 }) {
-  const { update, install } = settings.updates;
+  const { update, openSheet } = settings.updates;
   const [open, setOpen] = useState(false);
   const { profile, cloud } = settings;
 
@@ -83,7 +83,7 @@ export function ProfileButtons({
         <button
           type="button"
           className="m-update-pill"
-          onClick={install}
+          onClick={openSheet}
           title={`Descargar FoYu ${update.version}`}
         >
           <Icon name="download" />
@@ -305,9 +305,9 @@ export function ProfilePanel({
           {updateText ? ` · ${updateText}` : ""}
         </p>
         {updates.update ? (
-          <button type="button" className="m-primary" onClick={updates.install}>
+          <button type="button" className="m-primary" onClick={updates.openSheet}>
             <Icon name="download" />
-            Descargar {updates.update.version}
+            Instalar FoYu {updates.update.version}
           </button>
         ) : (
           <button
